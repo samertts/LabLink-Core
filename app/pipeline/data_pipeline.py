@@ -4,6 +4,7 @@ import logging
 
 from app.adapters.registry import AdapterRegistry
 from app.core.retry_queue import RetryQueue
+from app.edge.agent import EdgeAgentBuffer
 from app.integration.gula_client import GulaClient
 from app.pipeline.normalizer import NormalizedResult, Normalizer
 from app.pipeline.parser_engine import (
@@ -13,6 +14,8 @@ from app.pipeline.parser_engine import (
     ParsedResult,
     validate_checksum,
 )
+from app.pipeline.patient_matching import PatientMatcher
+from app.pipeline.smart_router import SmartRoutingEngine
 from app.pipeline.test_mapping import TestMappingEngine
 
 logger = logging.getLogger("lablink.pipeline")
@@ -34,6 +37,9 @@ class DataPipeline:
         mapping_engine: TestMappingEngine | None = None,
         retry_queue: RetryQueue | None = None,
         adapter_registry: AdapterRegistry | None = None,
+        patient_matcher: PatientMatcher | None = None,
+        router: SmartRoutingEngine | None = None,
+        edge_buffer: EdgeAgentBuffer | None = None,
     ) -> None:
         self.parser = parser
         self.normalizer = normalizer
@@ -41,6 +47,9 @@ class DataPipeline:
         self.mapping_engine = mapping_engine or TestMappingEngine()
         self.retry_queue = retry_queue or RetryQueue()
         self.adapter_registry = adapter_registry or AdapterRegistry()
+        self.patient_matcher = patient_matcher or PatientMatcher()
+        self.router = router or SmartRoutingEngine()
+        self.edge_buffer = edge_buffer or EdgeAgentBuffer()
         self.sessions: dict[str, ASTMDeviceSession] = {}
 
     async def process_chunk(
@@ -50,6 +59,7 @@ class DataPipeline:
         fallback_patient_id: str,
         chunk: bytes,
         vendor: str | None = None,
+        barcode: str | None = None,
     ) -> list[NormalizedResult]:
         session = self.sessions.setdefault(device_id, ASTMDeviceSession())
         session.buffer.append(chunk)
@@ -67,6 +77,11 @@ class DataPipeline:
                     if not row["test_code"] or not row["value"]:
                         continue
                     canonical = self.mapping_engine.canonical_code(row["test_code"])
+                    patient_id = self.patient_matcher.resolve_patient_id(
+                        row_patient_id=row["patient_id"],
+                        fallback_patient_id=fallback_patient_id,
+                        barcode=barcode,
+                    )
                     parsed = ParsedResult(
                         test_code=canonical,
                         value=float(row["value"]),
@@ -74,14 +89,19 @@ class DataPipeline:
                     )
                     normalized = self.normalizer.transform(
                         parsed,
-                        patient_id=row["patient_id"] or fallback_patient_id,
+                        patient_id=patient_id,
                         device_id=device_id,
                     )
                     normalized_results.append(normalized)
             except Exception:
                 logger.exception("Invalid ASTM frame", extra={"device_id": device_id})
 
-        if normalized_results:
+        if not normalized_results:
+            return normalized_results
+
+        decision = self.router.decide(device_id=device_id, results=normalized_results)
+
+        if decision.target in {"gula", "both"}:
             response = await self.gula_client.send_results(normalized_results)
             if response.get("status") == "failed":
                 self.retry_queue.enqueue(
@@ -91,5 +111,19 @@ class DataPipeline:
                         "reason": response.get("error", "send_failed"),
                     }
                 )
+                self.edge_buffer.enqueue(
+                    {
+                        "device_id": device_id,
+                        "results": [r.test_code for r in normalized_results],
+                    }
+                )
+
+        if decision.target in {"offline", "both"}:
+            self.edge_buffer.enqueue(
+                {
+                    "device_id": device_id,
+                    "results": [r.test_code for r in normalized_results],
+                }
+            )
 
         return normalized_results

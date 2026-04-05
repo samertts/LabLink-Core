@@ -6,6 +6,7 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+from app.core.alerting import AlertManager
 from app.core.device_manager import DeviceManager
 from app.integration.gula_client import GulaClient
 from app.pipeline.data_pipeline import DataPipeline
@@ -16,10 +17,11 @@ from app.storage.result_repository import ResultRepository
 
 logging.basicConfig(level=logging.INFO)
 
-app = FastAPI(title="LabLink Core", version="0.4.0")
+app = FastAPI(title="LabLink Core", version="0.5.0")
 
 repository = ResultRepository(InMemoryDB())
 device_manager = DeviceManager()
+alerts = AlertManager()
 pipeline = DataPipeline(
     parser=ASTMParser(),
     normalizer=Normalizer(),
@@ -32,6 +34,7 @@ class IngestRequest(BaseModel):
     device_id: str = Field(min_length=1)
     chunk: str = Field(min_length=1, description="Raw ASTM chunk; may include control chars")
     vendor: str | None = None
+    barcode: str | None = None
 
 
 class IngestResponse(BaseModel):
@@ -54,6 +57,10 @@ class RegisterDeviceRequest(BaseModel):
 
 class CommandRequest(BaseModel):
     command: str = Field(min_length=1)
+
+
+class RoutingPolicyRequest(BaseModel):
+    policy: Literal["gula", "offline", "both"]
 
 
 @app.get("/health")
@@ -101,8 +108,15 @@ def send_device_command(device_id: str, payload: CommandRequest) -> dict[str, st
     try:
         device_manager.send_command(device_id, payload.command)
     except Exception as exc:
+        alerts.emit(severity="error", message=str(exc), device_id=device_id)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"status": "sent", "device_id": device_id}
+
+
+@app.post("/devices/{device_id}/routing")
+def set_device_routing(device_id: str, payload: RoutingPolicyRequest) -> dict[str, str]:
+    pipeline.router.set_policy(device_id, payload.policy)
+    return {"status": "updated", "device_id": device_id, "policy": payload.policy}
 
 
 @app.post("/ingest", response_model=IngestResponse)
@@ -114,6 +128,7 @@ async def ingest(payload: IngestRequest) -> IngestResponse:
         fallback_patient_id=payload.patient_id,
         chunk=payload.chunk.encode("latin-1", errors="ignore"),
         vendor=payload.vendor,
+        barcode=payload.barcode,
     )
 
     if pipeline.retry_queue.size() > 0:
@@ -130,6 +145,17 @@ async def ingest(payload: IngestRequest) -> IngestResponse:
 
     repository.save_results(results)
     return IngestResponse(status="ok", processed=len(results), results=results)
+
+
+@app.post("/edge/sync")
+def sync_edge_buffer() -> dict[str, int]:
+    drained = pipeline.edge_buffer.drain()
+    return {"synced": len(drained)}
+
+
+@app.get("/alerts")
+def list_alerts() -> list[dict[str, str]]:
+    return alerts.list_alerts()
 
 
 @app.get("/results")

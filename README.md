@@ -1,6 +1,6 @@
 # LabLink Core (GULA Integration Engine)
 
-Phase-1..7 baseline now includes ASTM pipeline, device emulator, registry, adapter layer, command system, and hardening primitives.
+Phase-1..7 baseline now includes ASTM pipeline, device emulator, registry, adapter layer, command system, smart routing, patient matching, and edge/offline buffering.
 
 ## Implemented
 
@@ -19,12 +19,16 @@ Phase-1..7 baseline now includes ASTM pipeline, device emulator, registry, adapt
 - **Adapter layer (vendor-specific)**
   - `AdapterRegistry`
   - `SysmexAdapter`, `RocheAdapter`, `MindrayAdapter`, plus generic adapter
-- **Mapping + patient fallback**
+- **Patient matching + mapping**
+  - `PatientMatcher` resolves patient IDs from ASTM, barcode map, or fallback
   - `TestMappingEngine` unifies aliases (e.g. `Hb`/`HGB` -> `HEMOGLOBIN`)
-  - fallback patient matching from ingest request when patient record is missing
+- **Smart routing + edge mode**
+  - `SmartRoutingEngine` routes per device policy (`gula`/`offline`/`both`)
+  - `EdgeAgentBuffer` stores data in offline/branch mode and supports later sync
 - **Production hardening primitives**
   - `RetryQueue` for failed upstream sends
   - offline queue persistence and audit trail in repository
+  - `AlertManager` for operational alerts
 - **Device emulator (Phase 4)**
   - `TCPDeviceEmulator` supporting ENQ/ACK, multi-result ASTM frames, bad checksum mode, disconnect simulation, and multi-patient streams
 - **API endpoints**
@@ -32,7 +36,10 @@ Phase-1..7 baseline now includes ASTM pipeline, device emulator, registry, adapt
   - `GET /devices`
   - `GET /registry`
   - `POST /devices/{device_id}/command`
-  - `POST /ingest` (supports optional `vendor`)
+  - `POST /devices/{device_id}/routing`
+  - `POST /ingest` (supports optional `vendor` and `barcode`)
+  - `POST /edge/sync`
+  - `GET /alerts`
   - `GET /results`, `GET /logs`, `GET /audit`, `GET /offline-queue`
 
 ## Run LabLink API
