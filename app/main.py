@@ -1,0 +1,216 @@
+from __future__ import annotations
+
+import logging
+import uuid
+from typing import Annotated, Literal
+
+from fastapi import Depends, FastAPI, HTTPException
+from pydantic import BaseModel, Field
+
+from app.core.alerting import AlertManager
+from app.core.device_manager import DeviceManager
+from app.core.modes import CommunicationMode
+from app.edge.sync_engine import SyncEngine
+from app.integration.gula_client import GulaClient
+from app.pipeline.data_pipeline import DataPipeline
+from app.pipeline.normalizer import NormalizedResult, Normalizer
+from app.pipeline.parser_engine import ASTMParser
+from app.security.auth import verify_api_key
+from app.storage.db import InMemoryDB
+from app.storage.result_repository import ResultRepository
+
+logging.basicConfig(level=logging.INFO)
+
+app = FastAPI(title="LabLink Core", version="0.6.0")
+
+repository = ResultRepository(InMemoryDB())
+device_manager = DeviceManager()
+alerts = AlertManager()
+sync_engine = SyncEngine()
+mode = CommunicationMode.HYBRID
+pipeline = DataPipeline(
+    parser=ASTMParser(),
+    normalizer=Normalizer(),
+    gula_client=GulaClient(base_url="http://gula.local", lab_id="LAB001"),
+)
+
+Auth = Annotated[str, Depends(verify_api_key)]
+
+
+class IngestRequest(BaseModel):
+    patient_id: str = Field(min_length=1)
+    device_id: str = Field(min_length=1)
+    chunk: str = Field(min_length=1, description="Raw ASTM chunk; may include control chars")
+    vendor: str | None = None
+    barcode: str | None = None
+
+
+class IngestResponse(BaseModel):
+    status: Literal["ok"]
+    processed: int
+    results: list[NormalizedResult]
+
+
+class RegisterDeviceRequest(BaseModel):
+    device_id: str
+    type: Literal["tcp", "serial"]
+    host: str | None = None
+    port: int | None = None
+    path: str | None = None
+    baudrate: int = 9600
+    vendor: str = "unknown"
+    device_type: str = "unknown"
+    protocol: str = "ASTM"
+
+
+class CommandRequest(BaseModel):
+    command: str = Field(min_length=1)
+
+
+class RoutingPolicyRequest(BaseModel):
+    policy: Literal["gula", "offline", "both"]
+
+
+class ModeRequest(BaseModel):
+    mode: CommunicationMode
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.post("/devices/register")
+def register_device(payload: RegisterDeviceRequest, _auth: Auth) -> dict[str, str]:
+    config = payload.model_dump(exclude_none=True)
+    try:
+        device_manager.add_device(config)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "registered", "device_id": payload.device_id}
+
+
+@app.get("/devices")
+def list_devices(_auth: Auth) -> list[dict]:
+    return [
+        {
+            "device_id": d.device_id,
+            "is_connected": d.is_connected,
+        }
+        for d in device_manager.list_devices()
+    ]
+
+
+@app.get("/registry")
+def list_registry(_auth: Auth) -> list[dict]:
+    return [
+        {
+            "device_id": item.device_id,
+            "device_type": item.device_type,
+            "vendor": item.vendor,
+            "protocol": item.protocol,
+            "connection": item.connection,
+        }
+        for item in device_manager.list_registry()
+    ]
+
+
+@app.post("/devices/{device_id}/command")
+def send_device_command(device_id: str, payload: CommandRequest, _auth: Auth) -> dict[str, str]:
+    try:
+        device_manager.send_command(device_id, payload.command)
+    except Exception as exc:
+        alerts.emit(severity="error", message=str(exc), device_id=device_id)
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "sent", "device_id": device_id}
+
+
+@app.post("/devices/{device_id}/routing")
+def set_device_routing(device_id: str, payload: RoutingPolicyRequest, _auth: Auth) -> dict[str, str]:
+    pipeline.router.set_policy(device_id, payload.policy)
+    return {"status": "updated", "device_id": device_id, "policy": payload.policy}
+
+
+@app.post("/mode")
+def set_mode(payload: ModeRequest, _auth: Auth) -> dict[str, str]:
+    global mode
+    mode = payload.mode
+    return {"status": "updated", "mode": mode}
+
+
+@app.get("/mode")
+def get_mode(_auth: Auth) -> dict[str, str]:
+    return {"mode": mode}
+
+
+@app.post("/ingest", response_model=IngestResponse)
+async def ingest(payload: IngestRequest, _auth: Auth) -> IngestResponse:
+    repository.save_log(device_id=payload.device_id, raw_data=payload.chunk, status="received")
+
+    if mode == CommunicationMode.LOCAL_ONLY:
+        pipeline.router.set_policy(payload.device_id, "offline")
+    elif mode == CommunicationMode.CLOUD_ONLY:
+        pipeline.router.set_policy(payload.device_id, "gula")
+
+    results = await pipeline.process_chunk(
+        device_id=payload.device_id,
+        fallback_patient_id=payload.patient_id,
+        chunk=payload.chunk.encode("latin-1", errors="ignore"),
+        vendor=payload.vendor,
+        barcode=payload.barcode,
+    )
+
+    if pipeline.retry_queue.size() > 0:
+        for item in pipeline.retry_queue.list_all():
+            repository.enqueue_offline(item)
+            sync_engine.stage(
+                item_id=str(uuid.uuid4()),
+                device_id=item["device_id"],
+                payload=item,
+                version=1,
+            )
+
+    for _ in results:
+        repository.save_log(
+            device_id=payload.device_id,
+            raw_data=payload.chunk,
+            status="parsed",
+            error_message="",
+        )
+
+    repository.save_results(results)
+    return IngestResponse(status="ok", processed=len(results), results=results)
+
+
+@app.post("/edge/sync")
+async def sync_edge_buffer(_auth: Auth) -> dict[str, int]:
+    async def sender(payload: dict) -> dict:
+        pipeline.edge_buffer.enqueue(payload)
+        return {"status": "ok"}
+
+    return await sync_engine.sync(sender)
+
+
+@app.get("/alerts")
+def list_alerts(_auth: Auth) -> list[dict[str, str]]:
+    return alerts.list_alerts()
+
+
+@app.get("/results")
+def list_results(_auth: Auth) -> list[dict]:
+    return repository.list_results()
+
+
+@app.get("/logs")
+def list_logs(_auth: Auth) -> list[dict]:
+    return repository.list_logs()
+
+
+@app.get("/audit")
+def list_audit(_auth: Auth) -> list[dict]:
+    return repository.list_audit_trail()
+
+
+@app.get("/offline-queue")
+def list_offline_queue(_auth: Auth) -> list[dict]:
+    return repository.list_offline_queue()
