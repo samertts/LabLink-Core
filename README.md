@@ -1,6 +1,6 @@
 # LabLink Core (GULA Integration Engine)
 
-Phase-1..7 baseline now includes ASTM pipeline, device emulator, registry, adapter layer, command system, smart routing, patient matching, and edge/offline buffering.
+Phase-1..7 baseline now includes ASTM pipeline, device emulator, registry, adapter layer, command system, smart routing, patient matching, edge/offline buffering, and sync/security primitives.
 
 ## Implemented
 
@@ -25,10 +25,13 @@ Phase-1..7 baseline now includes ASTM pipeline, device emulator, registry, adapt
 - **Smart routing + edge mode**
   - `SmartRoutingEngine` routes per device policy (`gula`/`offline`/`both`)
   - `EdgeAgentBuffer` stores data in offline/branch mode and supports later sync
-- **Production hardening primitives**
+  - `SyncEngine` stages and syncs edge payloads with retry-friendly behavior
+- **Production hardening + security**
   - `RetryQueue` for failed upstream sends
   - offline queue persistence and audit trail in repository
   - `AlertManager` for operational alerts
+  - API key protection via `x-api-key` header (env: `LABLINK_API_KEY`)
+  - deployment modes: `local_only`, `hybrid`, `cloud_only`
 - **Device emulator (Phase 4)**
   - `TCPDeviceEmulator` supporting ENQ/ACK, multi-result ASTM frames, bad checksum mode, disconnect simulation, and multi-patient streams
 - **API endpoints**
@@ -37,6 +40,7 @@ Phase-1..7 baseline now includes ASTM pipeline, device emulator, registry, adapt
   - `GET /registry`
   - `POST /devices/{device_id}/command`
   - `POST /devices/{device_id}/routing`
+  - `POST /mode`, `GET /mode`
   - `POST /ingest` (supports optional `vendor` and `barcode`)
   - `POST /edge/sync`
   - `GET /alerts`
@@ -48,6 +52,7 @@ Phase-1..7 baseline now includes ASTM pipeline, device emulator, registry, adapt
 python -m venv .venv
 source .venv/bin/activate
 pip install -e .[dev]
+export LABLINK_API_KEY=lablink-dev-key
 uvicorn app.main:app --reload
 ```
 
