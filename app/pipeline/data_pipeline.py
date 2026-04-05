@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 
+from app.adapters.registry import AdapterRegistry
 from app.core.retry_queue import RetryQueue
 from app.integration.gula_client import GulaClient
 from app.pipeline.normalizer import NormalizedResult, Normalizer
@@ -32,12 +33,14 @@ class DataPipeline:
         gula_client: GulaClient,
         mapping_engine: TestMappingEngine | None = None,
         retry_queue: RetryQueue | None = None,
+        adapter_registry: AdapterRegistry | None = None,
     ) -> None:
         self.parser = parser
         self.normalizer = normalizer
         self.gula_client = gula_client
         self.mapping_engine = mapping_engine or TestMappingEngine()
         self.retry_queue = retry_queue or RetryQueue()
+        self.adapter_registry = adapter_registry or AdapterRegistry()
         self.sessions: dict[str, ASTMDeviceSession] = {}
 
     async def process_chunk(
@@ -46,9 +49,11 @@ class DataPipeline:
         device_id: str,
         fallback_patient_id: str,
         chunk: bytes,
+        vendor: str | None = None,
     ) -> list[NormalizedResult]:
         session = self.sessions.setdefault(device_id, ASTMDeviceSession())
         session.buffer.append(chunk)
+        adapter = self.adapter_registry.resolve(vendor)
 
         normalized_results: list[NormalizedResult] = []
         for payload, received_checksum in session.buffer.extract_frames():
@@ -56,6 +61,7 @@ class DataPipeline:
                 validate_checksum(payload, received_checksum)
                 records = self.parser.parse_frame(payload)
                 message_rows = session.builder.process_records(records)
+                message_rows = adapter.transform_rows(message_rows)
 
                 for row in message_rows:
                     if not row["test_code"] or not row["value"]:

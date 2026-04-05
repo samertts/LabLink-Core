@@ -1,6 +1,6 @@
 # LabLink Core (GULA Integration Engine)
 
-Phase-1..7 baseline now includes ASTM pipeline, device emulator, registry, command system, and hardening primitives.
+Phase-1..7 baseline now includes ASTM pipeline, device emulator, registry, adapter layer, command system, and hardening primitives.
 
 ## Implemented
 
@@ -16,6 +16,9 @@ Phase-1..7 baseline now includes ASTM pipeline, device emulator, registry, comma
   - checksum calc/validation
   - parser for `H/P/R/L` records
   - message builder to associate results with active patient
+- **Adapter layer (vendor-specific)**
+  - `AdapterRegistry`
+  - `SysmexAdapter`, `RocheAdapter`, `MindrayAdapter`, plus generic adapter
 - **Mapping + patient fallback**
   - `TestMappingEngine` unifies aliases (e.g. `Hb`/`HGB` -> `HEMOGLOBIN`)
   - fallback patient matching from ingest request when patient record is missing
@@ -23,13 +26,13 @@ Phase-1..7 baseline now includes ASTM pipeline, device emulator, registry, comma
   - `RetryQueue` for failed upstream sends
   - offline queue persistence and audit trail in repository
 - **Device emulator (Phase 4)**
-  - `TCPDeviceEmulator` supporting ENQ/ACK, multi-result ASTM frames, optional bad checksum and disconnect simulation
+  - `TCPDeviceEmulator` supporting ENQ/ACK, multi-result ASTM frames, bad checksum mode, disconnect simulation, and multi-patient streams
 - **API endpoints**
   - `POST /devices/register`
   - `GET /devices`
   - `GET /registry`
   - `POST /devices/{device_id}/command`
-  - `POST /ingest`
+  - `POST /ingest` (supports optional `vendor`)
   - `GET /results`, `GET /logs`, `GET /audit`, `GET /offline-queue`
 
 ## Run LabLink API

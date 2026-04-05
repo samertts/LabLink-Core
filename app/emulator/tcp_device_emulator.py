@@ -18,11 +18,25 @@ class EmulatorResult:
 
 
 class TCPDeviceEmulator:
-    """ASTM TCP emulator: ENQ/ACK handshake + multi-frame + optional fault injection."""
+    """ASTM TCP emulator: ENQ/ACK handshake + multi-frame + fault injection."""
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 5000) -> None:
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 5000,
+        *,
+        results: list[EmulatorResult] | None = None,
+        bad_checksum: bool = False,
+        disconnect_after_first: bool = False,
+    ) -> None:
         self.host = host
         self.port = port
+        self.results = results or [
+            EmulatorResult("12345", "Ali^Samer", "Hb", "13.5", "g/dL"),
+            EmulatorResult("12345", "Ali^Samer", "WBC", "6.2", "10^9/L"),
+        ]
+        self.bad_checksum = bad_checksum
+        self.disconnect_after_first = disconnect_after_first
         self._server_socket: socket.socket | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
@@ -65,12 +79,12 @@ class TCPDeviceEmulator:
 
         self.send_results(
             conn,
-            [
-                EmulatorResult("12345", "Ali^Samer", "Hb", "13.5", "g/dL"),
-                EmulatorResult("12345", "Ali^Samer", "WBC", "6.2", "10^9/L"),
-            ],
+            self.results,
+            bad_checksum=self.bad_checksum,
+            disconnect_after_first=self.disconnect_after_first,
         )
-        conn.sendall(bytes([EOT]))
+        if not self.disconnect_after_first:
+            conn.sendall(bytes([EOT]))
 
     def send_results(
         self,

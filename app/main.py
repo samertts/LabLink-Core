@@ -31,6 +31,7 @@ class IngestRequest(BaseModel):
     patient_id: str = Field(min_length=1)
     device_id: str = Field(min_length=1)
     chunk: str = Field(min_length=1, description="Raw ASTM chunk; may include control chars")
+    vendor: str | None = None
 
 
 class IngestResponse(BaseModel):
@@ -112,6 +113,7 @@ async def ingest(payload: IngestRequest) -> IngestResponse:
         device_id=payload.device_id,
         fallback_patient_id=payload.patient_id,
         chunk=payload.chunk.encode("latin-1", errors="ignore"),
+        vendor=payload.vendor,
     )
 
     if pipeline.retry_queue.size() > 0:
