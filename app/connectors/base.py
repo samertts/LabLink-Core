@@ -30,6 +30,10 @@ class BaseConnector(ABC):
     def disconnect(self) -> None:
         raise NotImplementedError
 
+    @abstractmethod
+    def send_command(self, payload: bytes) -> None:
+        raise NotImplementedError
+
     def on_data(self, callback: DataHandler) -> None:
         self._callback = callback
 
@@ -85,10 +89,17 @@ class SerialConnector(BaseConnector):
                     continue
 
                 self._emit_data(chunk)
+                if self._port is not None:
+                    self._port.write(bytes([ACK]))
             except Exception:
                 logger.exception("Serial read loop failed", extra={"device_id": self.device_id})
                 self.is_connected = False
                 break
+
+    def send_command(self, payload: bytes) -> None:
+        if self._port is None:
+            raise RuntimeError("Serial port is not connected")
+        self._port.write(payload)
 
     def disconnect(self) -> None:
         self._stop_event.set()
@@ -140,7 +151,16 @@ class TCPConnector(BaseConnector):
                         data = conn.recv(4096)
                         if not data:
                             raise ConnectionError("Remote peer closed connection")
+
+                        if len(data) == 1 and data[0] == ENQ:
+                            conn.sendall(bytes([ACK]))
+                            continue
+
+                        if len(data) == 1 and data[0] == EOT:
+                            continue
+
                         self._emit_data(data)
+                        conn.sendall(bytes([ACK]))
             except Exception as exc:
                 self.is_connected = False
                 logger.warning(
@@ -153,6 +173,11 @@ class TCPConnector(BaseConnector):
                     },
                 )
                 time.sleep(self.reconnect_delay_seconds)
+
+    def send_command(self, payload: bytes) -> None:
+        if self._socket is None:
+            raise RuntimeError("TCP socket is not connected")
+        self._socket.sendall(payload)
 
     def disconnect(self) -> None:
         self._stop_event.set()

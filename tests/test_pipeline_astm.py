@@ -35,5 +35,5 @@ def test_pipeline_processes_real_astm_frame() -> None:
 
     assert len(results) == 1
     assert results[0].patient_id == "12345"
-    assert results[0].test_code == "Hb"
+    assert results[0].test_code == "HEMOGLOBIN"
     assert len(gula.sent_batches) == 1

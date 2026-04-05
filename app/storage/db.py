@@ -8,3 +8,5 @@ from typing import Any
 class InMemoryDB:
     results: list[dict[str, Any]] = field(default_factory=list)
     logs: list[dict[str, Any]] = field(default_factory=list)
+    audit_trail: list[dict[str, Any]] = field(default_factory=list)
+    offline_queue: list[dict[str, Any]] = field(default_factory=list)

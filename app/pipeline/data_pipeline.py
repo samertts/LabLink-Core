@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 
+from app.core.retry_queue import RetryQueue
 from app.integration.gula_client import GulaClient
 from app.pipeline.normalizer import NormalizedResult, Normalizer
 from app.pipeline.parser_engine import (
@@ -11,6 +12,7 @@ from app.pipeline.parser_engine import (
     ParsedResult,
     validate_checksum,
 )
+from app.pipeline.test_mapping import TestMappingEngine
 
 logger = logging.getLogger("lablink.pipeline")
 
@@ -28,10 +30,14 @@ class DataPipeline:
         parser: ASTMParser,
         normalizer: Normalizer,
         gula_client: GulaClient,
+        mapping_engine: TestMappingEngine | None = None,
+        retry_queue: RetryQueue | None = None,
     ) -> None:
         self.parser = parser
         self.normalizer = normalizer
         self.gula_client = gula_client
+        self.mapping_engine = mapping_engine or TestMappingEngine()
+        self.retry_queue = retry_queue or RetryQueue()
         self.sessions: dict[str, ASTMDeviceSession] = {}
 
     async def process_chunk(
@@ -54,8 +60,9 @@ class DataPipeline:
                 for row in message_rows:
                     if not row["test_code"] or not row["value"]:
                         continue
+                    canonical = self.mapping_engine.canonical_code(row["test_code"])
                     parsed = ParsedResult(
-                        test_code=row["test_code"],
+                        test_code=canonical,
                         value=float(row["value"]),
                         unit=row["unit"],
                     )
@@ -69,6 +76,14 @@ class DataPipeline:
                 logger.exception("Invalid ASTM frame", extra={"device_id": device_id})
 
         if normalized_results:
-            await self.gula_client.send_results(normalized_results)
+            response = await self.gula_client.send_results(normalized_results)
+            if response.get("status") == "failed":
+                self.retry_queue.enqueue(
+                    {
+                        "device_id": device_id,
+                        "results": [r.test_code for r in normalized_results],
+                        "reason": response.get("error", "send_failed"),
+                    }
+                )
 
         return normalized_results

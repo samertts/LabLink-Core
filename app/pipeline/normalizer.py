@@ -7,7 +7,9 @@ from app.pipeline.parser_engine import ParsedResult
 
 
 TEST_NAME_MAP = {
-    "Hb": "Hemoglobin",
+    "HEMOGLOBIN": "Hemoglobin",
+    "HB": "Hemoglobin",
+    "HGB": "Hemoglobin",
 }
 
 
@@ -37,7 +39,7 @@ class Normalizer:
             patient_id=patient_id,
             device_id=device_id,
             test_code=data.test_code,
-            test_name=TEST_NAME_MAP.get(data.test_code, data.test_code),
+            test_name=TEST_NAME_MAP.get(data.test_code.upper(), data.test_code),
             value=data.value,
             unit=data.unit,
             reference_range=reference_range,

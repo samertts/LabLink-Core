@@ -23,6 +23,16 @@ class ConnectionPool:
     def all(self) -> list[BaseConnector]:
         return list(self._connections.values())
 
+    def send_to(self, device_id: str, payload: bytes) -> None:
+        connector = self._connections.get(device_id)
+        if connector is None:
+            raise KeyError(f"Device not found: {device_id}")
+        connector.send_command(payload)
+
+    def broadcast(self, payload: bytes) -> None:
+        for connector in self._connections.values():
+            connector.send_command(payload)
+
     def shutdown(self) -> None:
         for connector in self._connections.values():
             connector.disconnect()
