@@ -1,33 +1,37 @@
 from __future__ import annotations
 
-import logging
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from pydantic import BaseModel, Field
 
-from app.normalization.schema import NormalizedResult, normalize_result
-from app.parsers.astm_basic import ASTMParseError, parse_astm_result_line
+from app.pipeline.data_pipeline import DataPipeline
+from app.pipeline.normalizer import Normalizer
+from app.pipeline.parser_engine import ParserEngine
+from app.storage.result_repository import LogRepository, ResultRepository
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("lablink")
+app = FastAPI(title="LabLink Core", version="0.2.0")
 
-app = FastAPI(title="LabLink Core", version="0.1.0")
-
-RESULTS_BUFFER: list[NormalizedResult] = []
-RAW_LOGS: list[dict[str, str]] = []
+RESULT_REPO = ResultRepository()
+LOG_REPO = LogRepository()
+PIPELINE = DataPipeline(
+    parser=ParserEngine(),
+    normalizer=Normalizer(),
+    result_repo=RESULT_REPO,
+    log_repo=LOG_REPO,
+)
 
 
 class IngestRequest(BaseModel):
     lab_id: str = Field(min_length=1)
     patient_id: str = Field(min_length=1)
     device_id: str = Field(min_length=1)
-    raw_data: str = Field(min_length=1, description="ASTM-like payload")
+    raw_data: str = Field(min_length=1, description="ASTM-like payload chunk")
 
 
 class IngestResponse(BaseModel):
     status: Literal["ok"]
-    result: NormalizedResult
+    buffered_results: int
 
 
 @app.get("/health")
@@ -36,45 +40,41 @@ def health() -> dict[str, str]:
 
 
 @app.post("/ingest", response_model=IngestResponse)
-def ingest(payload: IngestRequest) -> IngestResponse:
-    RAW_LOGS.append(
-        {
-            "device_id": payload.device_id,
-            "raw_data": payload.raw_data,
-            "status": "received",
-            "error_message": "",
-        }
-    )
-
-    try:
-        parsed = parse_astm_result_line(payload.raw_data)
-    except ASTMParseError as exc:
-        RAW_LOGS.append(
-            {
-                "device_id": payload.device_id,
-                "raw_data": payload.raw_data,
-                "status": "error",
-                "error_message": str(exc),
-            }
-        )
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    normalized = normalize_result(
-        parsed,
+async def ingest(payload: IngestRequest) -> IngestResponse:
+    await PIPELINE.process_chunk(
+        payload.raw_data,
         patient_id=payload.patient_id,
         device_id=payload.device_id,
     )
-    RESULTS_BUFFER.append(normalized)
-    logger.info("Normalized result generated", extra={"test_code": normalized.test_code})
-
-    return IngestResponse(status="ok", result=normalized)
+    return IngestResponse(status="ok", buffered_results=len(RESULT_REPO.list()))
 
 
-@app.get("/results", response_model=list[NormalizedResult])
-def list_results() -> list[NormalizedResult]:
-    return RESULTS_BUFFER
+@app.get("/results")
+def list_results() -> list[dict[str, str | float]]:
+    return [
+        {
+            "patient_id": item.patient_id,
+            "device_id": item.device_id,
+            "test_code": item.test_code,
+            "test_name": item.test_name,
+            "value": item.value,
+            "unit": item.unit,
+            "reference_range": item.reference_range,
+            "timestamp": item.timestamp.isoformat(),
+            "status": item.status,
+        }
+        for item in RESULT_REPO.list()
+    ]
 
 
 @app.get("/logs")
 def list_logs() -> list[dict[str, str]]:
-    return RAW_LOGS
+    return [
+        {
+            "device_id": item.device_id,
+            "raw_data": item.raw_data,
+            "status": item.status,
+            "error_message": item.error_message,
+        }
+        for item in LOG_REPO.list()
+    ]

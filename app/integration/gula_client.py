@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from typing import Any
 
-import httpx
-
 from app.normalization.schema import NormalizedResult
 
 
@@ -14,6 +12,8 @@ class GulaClient:
         self.timeout = timeout
 
     async def send_results(self, results: list[NormalizedResult]) -> dict[str, Any]:
+        import httpx
+
         payload = {
             "lab_id": self.lab_id,
             "results": [
