@@ -1,53 +1,49 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Literal
+from typing import Any
 
 from app.connectors.base import BaseConnector, SerialConnector, TCPConnector
 from app.core.connection_pool import ConnectionPool
 
 
-@dataclass(slots=True)
-class DeviceConfig:
-    device_id: str
-    connection_type: Literal["serial", "tcp"]
-    path: str | None = None
-    baudrate: int = 9600
-    host: str | None = None
-    port: int | None = None
-    encoding: str = "utf-8"
-
-
 class DeviceManager:
+    """Creates, tracks, and controls connectors for all onboarded devices."""
+
     def __init__(self, pool: ConnectionPool | None = None) -> None:
         self.pool = pool or ConnectionPool()
 
-    def add_device(self, config: DeviceConfig) -> BaseConnector:
-        connector: BaseConnector
-        if config.connection_type == "serial":
-            if not config.path:
-                raise ValueError("Serial config requires path")
-            connector = SerialConnector(
-                config.device_id,
-                path=config.path,
-                baudrate=config.baudrate,
-                encoding=config.encoding,
-            )
-        elif config.connection_type == "tcp":
-            if not config.host or config.port is None:
-                raise ValueError("TCP config requires host and port")
-            connector = TCPConnector(
-                config.device_id,
-                host=config.host,
-                port=config.port,
-                encoding=config.encoding,
-            )
-        else:
-            raise ValueError(f"Unsupported connection type: {config.connection_type}")
-
-        self.pool.add(connector)
+    def add_device(self, config: dict[str, Any]) -> BaseConnector:
+        connector = self._build_connector(config)
         connector.connect()
+        self.pool.add(connector)
         return connector
 
     def remove_device(self, device_id: str) -> None:
         self.pool.remove(device_id)
+
+    def list_devices(self) -> list[BaseConnector]:
+        return self.pool.all()
+
+    def shutdown(self) -> None:
+        self.pool.shutdown()
+
+    def _build_connector(self, config: dict[str, Any]) -> BaseConnector:
+        connector_type = str(config["type"]).lower()
+        device_id = str(config["device_id"])
+
+        if connector_type == "serial":
+            return SerialConnector(
+                device_id=device_id,
+                path=str(config["path"]),
+                baudrate=int(config.get("baudrate", 9600)),
+            )
+
+        if connector_type == "tcp":
+            return TCPConnector(
+                device_id=device_id,
+                host=str(config["host"]),
+                port=int(config["port"]),
+                reconnect_delay_seconds=float(config.get("reconnect_delay_seconds", 1.0)),
+            )
+
+        raise ValueError(f"Unsupported connector type: {connector_type}")

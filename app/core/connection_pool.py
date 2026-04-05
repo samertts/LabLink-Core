@@ -1,48 +1,29 @@
 from __future__ import annotations
 
-import logging
-import threading
-import time
-
 from app.connectors.base import BaseConnector
-
-logger = logging.getLogger("lablink.connection_pool")
 
 
 class ConnectionPool:
-    """Maintains active connectors and retries failed connections."""
+    """Keeps active connector instances keyed by device ID."""
 
-    def __init__(self, reconnect_delay_s: float = 2.0) -> None:
-        self.reconnect_delay_s = reconnect_delay_s
-        self._connectors: dict[str, BaseConnector] = {}
-        self._lock = threading.Lock()
+    def __init__(self) -> None:
+        self._connections: dict[str, BaseConnector] = {}
 
     def add(self, connector: BaseConnector) -> None:
-        with self._lock:
-            self._connectors[connector.connector_id] = connector
+        self._connections[connector.device_id] = connector
 
-        connector.on_disconnect(lambda exc: self._schedule_reconnect(connector, exc))
+    def get(self, device_id: str) -> BaseConnector | None:
+        return self._connections.get(device_id)
 
-    def remove(self, connector_id: str) -> None:
-        with self._lock:
-            connector = self._connectors.pop(connector_id, None)
-        if connector:
-            connector.disconnect()
-
-    def _schedule_reconnect(self, connector: BaseConnector, exc: BaseException | None) -> None:
-        logger.warning("Connector disconnected", extra={"connector_id": connector.connector_id, "error": repr(exc)})
-
-        def _reconnect() -> None:
-            time.sleep(self.reconnect_delay_s)
-            try:
-                connector.connect()
-                logger.info("Connector reconnected", extra={"connector_id": connector.connector_id})
-            except BaseException as retry_exc:
-                logger.exception("Reconnect failed", extra={"connector_id": connector.connector_id, "error": repr(retry_exc)})
-                self._schedule_reconnect(connector, retry_exc)
-
-        threading.Thread(target=_reconnect, daemon=True).start()
+    def remove(self, device_id: str) -> None:
+        existing = self._connections.pop(device_id, None)
+        if existing is not None:
+            existing.disconnect()
 
     def all(self) -> list[BaseConnector]:
-        with self._lock:
-            return list(self._connectors.values())
+        return list(self._connections.values())
+
+    def shutdown(self) -> None:
+        for connector in self._connections.values():
+            connector.disconnect()
+        self._connections.clear()

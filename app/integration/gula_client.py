@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import logging
 from typing import Any
 
-from app.normalization.schema import NormalizedResult
+import httpx
+
+from app.pipeline.normalizer import NormalizedResult
+
+logger = logging.getLogger("lablink.gula")
 
 
 class GulaClient:
@@ -12,8 +17,6 @@ class GulaClient:
         self.timeout = timeout
 
     async def send_results(self, results: list[NormalizedResult]) -> dict[str, Any]:
-        import httpx
-
         payload = {
             "lab_id": self.lab_id,
             "results": [
@@ -28,7 +31,11 @@ class GulaClient:
             ],
         }
 
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.post(f"{self.base_url}/api/v1/results", json=payload)
-            response.raise_for_status()
-            return response.json()
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(f"{self.base_url}/api/v1/results", json=payload)
+                response.raise_for_status()
+                return response.json()
+        except Exception as exc:
+            logger.warning("GULA send failed", extra={"error": str(exc), "lab_id": self.lab_id})
+            return {"status": "failed", "error": str(exc)}
