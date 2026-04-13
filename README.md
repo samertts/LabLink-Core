@@ -34,10 +34,20 @@ Phase-1..7 baseline now includes ASTM pipeline, device emulator, registry, adapt
   - deployment modes: `local_only`, `hybrid`, `cloud_only`
 - **Device emulator (Phase 4)**
   - `TCPDeviceEmulator` supporting ENQ/ACK, multi-result ASTM frames, bad checksum mode, disconnect simulation, and multi-patient streams
+- **Device onboarding director (new)**
+  - Identity scoring from hardware fingerprint (VID/PID/manufacturer/model)
+  - Driver candidate discovery per OS (Windows/Linux)
+  - Installation plan generator with secure validation steps
+  - Wired/wireless transport recommendation for high-speed operation
+  - Safety gates before registration (minimum confidence + explicit generic-driver approval)
+  - `dry_run` mode to validate onboarding plan before live registration in healthcare environments
+
 - **API endpoints**
   - `POST /devices/register`
   - `GET /devices`
   - `GET /registry`
+  - `POST /devices/onboarding/scan`
+  - `POST /devices/onboarding/execute`
   - `POST /devices/{device_id}/command`
   - `POST /devices/{device_id}/routing`
   - `POST /mode`, `GET /mode`
@@ -67,3 +77,8 @@ python -m app.emulator.tcp_device_emulator
 ```bash
 pytest -q
 ```
+
+
+## Project Manager Blueprint
+
+See `docs/PROJECT_DIRECTOR_PLAN.md` for the world-class rollout strategy and research references.
