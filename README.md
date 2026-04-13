@@ -45,6 +45,7 @@ Phase-1..7 baseline now includes ASTM pipeline, device emulator, registry, adapt
   - `GET /devices`
   - `GET /registry`
   - `POST /devices/onboarding/scan`
+  - `POST /devices/onboarding/execute`
   - `POST /devices/{device_id}/command`
   - `POST /devices/{device_id}/routing`
   - `POST /mode`, `GET /mode`

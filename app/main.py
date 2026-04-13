@@ -103,6 +103,23 @@ class DeviceScanResponse(BaseModel):
     transport: dict[str, str | int]
 
 
+class OnboardingExecuteRequest(DeviceScanRequest):
+    device_id: str = Field(min_length=1)
+    connector_type: Literal["tcp", "serial"]
+    host: str | None = None
+    port: int | None = None
+    path: str | None = None
+    baudrate: int = 9600
+    vendor: str = "unknown"
+    device_type: str = "unknown"
+
+
+class OnboardingExecuteResponse(BaseModel):
+    status: Literal["registered"]
+    device_id: str
+    scan: DeviceScanResponse
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -175,6 +192,63 @@ def scan_device_onboarding(payload: DeviceScanRequest, _auth: Auth) -> DeviceSca
         install_plan=plan,
         transport=transport,
     )
+
+
+@app.post("/devices/onboarding/execute", response_model=OnboardingExecuteResponse)
+def execute_device_onboarding(payload: OnboardingExecuteRequest, _auth: Auth) -> OnboardingExecuteResponse:
+    identity = onboarding_director.identify_device(
+        DeviceFingerprint(
+            vendor_id=payload.vendor_id,
+            product_id=payload.product_id,
+            manufacturer=payload.manufacturer,
+            model=payload.model,
+            device_class=payload.device_class,
+            protocol_hint=payload.protocol_hint,
+        )
+    )
+    drivers = onboarding_director.driver_candidates(payload.os_name, identity["protocol"])
+    plan = onboarding_director.install_plan(payload.os_name, identity["protocol"])
+    transport = onboarding_director.recommend_transport(
+        supports_wireless=payload.supports_wireless,
+        required_mbps=payload.required_mbps,
+        max_latency_ms=payload.max_latency_ms,
+        distance_meters=payload.distance_meters,
+    )
+
+    config = {
+        "device_id": payload.device_id,
+        "type": payload.connector_type,
+        "vendor": payload.vendor,
+        "device_type": payload.device_type,
+        "protocol": str(identity["protocol"]),
+        "baudrate": payload.baudrate,
+    }
+    if payload.connector_type == "tcp":
+        if payload.host is None or payload.port is None:
+            raise HTTPException(status_code=400, detail="host and port are required for tcp connector")
+        config["host"] = payload.host
+        config["port"] = payload.port
+    else:
+        if payload.path is None:
+            raise HTTPException(status_code=400, detail="path is required for serial connector")
+        config["path"] = payload.path
+
+    try:
+        device_manager.add_device(config)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    scan = DeviceScanResponse(
+        identity=str(identity["identity"]),
+        protocol=str(identity["protocol"]),
+        device_class=str(identity["device_class"]),
+        confidence=float(identity["confidence"]),
+        driver_candidates=drivers,
+        install_plan=plan,
+        transport=transport,
+    )
+    return OnboardingExecuteResponse(status="registered", device_id=payload.device_id, scan=scan)
+
 @app.post("/devices/{device_id}/command")
 def send_device_command(device_id: str, payload: CommandRequest, _auth: Auth) -> dict[str, str]:
     try:
