@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 
 from app.core.alerting import AlertManager
 from app.core.device_manager import DeviceManager
+from app.core.device_onboarding import DeviceFingerprint, DeviceOnboardingDirector
 from app.core.modes import CommunicationMode
 from app.edge.sync_engine import SyncEngine
 from app.integration.gula_client import GulaClient
@@ -28,6 +29,8 @@ device_manager = DeviceManager()
 alerts = AlertManager()
 sync_engine = SyncEngine()
 mode = CommunicationMode.HYBRID
+onboarding_director = DeviceOnboardingDirector()
+
 pipeline = DataPipeline(
     parser=ASTMParser(),
     normalizer=Normalizer(),
@@ -75,6 +78,31 @@ class ModeRequest(BaseModel):
     mode: CommunicationMode
 
 
+
+class DeviceScanRequest(BaseModel):
+    os_name: Literal["windows", "linux"]
+    supports_wireless: bool = True
+    required_mbps: int = Field(default=50, ge=1, le=10_000)
+    max_latency_ms: int = Field(default=20, ge=1, le=1_000)
+    distance_meters: int = Field(default=10, ge=1, le=200)
+    protocol_hint: str = "ASTM"
+    vendor_id: str | None = None
+    product_id: str | None = None
+    manufacturer: str | None = None
+    model: str | None = None
+    device_class: str | None = None
+
+
+class DeviceScanResponse(BaseModel):
+    identity: str
+    protocol: str
+    device_class: str
+    confidence: float
+    driver_candidates: list[dict[str, str]]
+    install_plan: list[str]
+    transport: dict[str, str | int]
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -115,6 +143,38 @@ def list_registry(_auth: Auth) -> list[dict]:
     ]
 
 
+
+
+@app.post("/devices/onboarding/scan", response_model=DeviceScanResponse)
+def scan_device_onboarding(payload: DeviceScanRequest, _auth: Auth) -> DeviceScanResponse:
+    identity = onboarding_director.identify_device(
+        DeviceFingerprint(
+            vendor_id=payload.vendor_id,
+            product_id=payload.product_id,
+            manufacturer=payload.manufacturer,
+            model=payload.model,
+            device_class=payload.device_class,
+            protocol_hint=payload.protocol_hint,
+        )
+    )
+    drivers = onboarding_director.driver_candidates(payload.os_name, identity["protocol"])
+    plan = onboarding_director.install_plan(payload.os_name, identity["protocol"])
+    transport = onboarding_director.recommend_transport(
+        supports_wireless=payload.supports_wireless,
+        required_mbps=payload.required_mbps,
+        max_latency_ms=payload.max_latency_ms,
+        distance_meters=payload.distance_meters,
+    )
+
+    return DeviceScanResponse(
+        identity=str(identity["identity"]),
+        protocol=str(identity["protocol"]),
+        device_class=str(identity["device_class"]),
+        confidence=float(identity["confidence"]),
+        driver_candidates=drivers,
+        install_plan=plan,
+        transport=transport,
+    )
 @app.post("/devices/{device_id}/command")
 def send_device_command(device_id: str, payload: CommandRequest, _auth: Auth) -> dict[str, str]:
     try:
