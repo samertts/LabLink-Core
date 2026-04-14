@@ -49,6 +49,7 @@ def test_scan_endpoint_returns_plan() -> None:
     body = response.json()
     assert body["protocol"] == "ASTM"
     assert body["transport"]["technology"] == "wifi-6e"
+    assert body["connectivity_profile"]["topology"] == "local-primary-global-failover"
     assert len(body["install_plan"]) >= 4
 
 

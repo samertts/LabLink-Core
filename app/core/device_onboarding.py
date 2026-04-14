@@ -7,7 +7,7 @@ from typing import Literal
 @dataclass(frozen=True, slots=True)
 class DriverPackage:
     name: str
-    os: Literal["windows", "linux"]
+    os: Literal["windows", "linux", "macos"]
     install_hint: str
     source: str
     supported_protocols: tuple[str, ...]
@@ -56,10 +56,47 @@ class DeviceOnboardingDirector:
                 source="lablink-marketplace",
                 supported_protocols=("HL7", "FHIR", "tcp", "https"),
             ),
+            DriverPackage(
+                name="HL7/FHIR Bridge Agent",
+                os="macos",
+                install_hint="pkg installer + launchd service bootstrap",
+                source="lablink-marketplace",
+                supported_protocols=("HL7", "FHIR", "tcp", "https"),
+            ),
+            DriverPackage(
+                name="Global Interop Gateway",
+                os="windows",
+                install_hint="install signed gateway bundle + enable TLS profile",
+                source="lablink-marketplace",
+                supported_protocols=("ASTM", "HL7", "FHIR", "DICOM", "MQTT", "REST", "https"),
+            ),
+            DriverPackage(
+                name="Global Interop Gateway",
+                os="linux",
+                install_hint="install signed gateway bundle + enable systemd service",
+                source="lablink-marketplace",
+                supported_protocols=("ASTM", "HL7", "FHIR", "DICOM", "MQTT", "REST", "https"),
+            ),
+            DriverPackage(
+                name="Global Interop Gateway",
+                os="macos",
+                install_hint="pkg installer + trust profile activation",
+                source="lablink-marketplace",
+                supported_protocols=("ASTM", "HL7", "FHIR", "DICOM", "MQTT", "REST", "https"),
+            ),
         )
+        self._protocol_aliases = {
+            "LIS2A2": "ASTM",
+            "LIS2-A2": "ASTM",
+            "HL7V2": "HL7",
+            "HL7-V2": "HL7",
+            "FHIR-R4": "FHIR",
+            "HTTPS": "REST",
+            "HTTP": "REST",
+        }
 
     def identify_device(self, fingerprint: DeviceFingerprint) -> dict[str, str | float]:
-        protocol = (fingerprint.protocol_hint or "ASTM").upper()
+        protocol = self._normalize_protocol(fingerprint.protocol_hint or "ASTM")
         device_class = (fingerprint.device_class or "unknown").lower()
         manufacturer = (fingerprint.manufacturer or "unknown").strip()
         model = (fingerprint.model or "generic").strip()
@@ -79,13 +116,18 @@ class DeviceOnboardingDirector:
             "confidence": min(score, 0.98),
         }
 
-    def driver_candidates(self, os_name: Literal["windows", "linux"], protocol: str) -> list[dict[str, str]]:
-        normalized = protocol.upper()
+    def _normalize_protocol(self, protocol: str) -> str:
+        key = protocol.strip().upper()
+        return self._protocol_aliases.get(key, key)
+
+    def driver_candidates(self, os_name: Literal["windows", "linux", "macos"], protocol: str) -> list[dict[str, str]]:
+        normalized = self._normalize_protocol(protocol)
         matches: list[dict[str, str]] = []
         for package in self._driver_catalog:
             if package.os != os_name:
                 continue
-            if normalized not in package.supported_protocols and normalized.lower() not in package.supported_protocols:
+            supported = {item.upper() for item in package.supported_protocols}
+            if normalized.upper() not in supported:
                 continue
             matches.append(
                 {
@@ -104,7 +146,7 @@ class DeviceOnboardingDirector:
             )
         return matches
 
-    def install_plan(self, os_name: Literal["windows", "linux"], protocol: str) -> list[str]:
+    def install_plan(self, os_name: Literal["windows", "linux", "macos"], protocol: str) -> list[str]:
         candidates = self.driver_candidates(os_name=os_name, protocol=protocol)
         steps = [
             "Capture hardware fingerprint (VID/PID, serial number, firmware version)",
@@ -116,9 +158,41 @@ class DeviceOnboardingDirector:
             [
                 "Run loopback ASTM/HL7 handshake validation",
                 "Bind device to LabLink policy profile and enable telemetry",
+                "Run interoperability checks for local LIS and global cloud APIs (FHIR/REST)",
             ]
         )
         return steps
+
+    def connectivity_profile(
+        self,
+        *,
+        deployment_target: Literal["local", "global", "hybrid"],
+        region: str,
+        max_latency_ms: int,
+    ) -> dict[str, str | int]:
+        if deployment_target == "local":
+            return {
+                "topology": "direct-lan",
+                "security": "mutual-tls-optional",
+                "optimization": "persistent sockets + local DNS cache",
+                "region": region,
+                "target_rtt_ms": min(max_latency_ms, 10),
+            }
+        if deployment_target == "global":
+            return {
+                "topology": "regional-edge-relay",
+                "security": "mutual-tls-required",
+                "optimization": "nearest-region routing + connection pooling",
+                "region": region,
+                "target_rtt_ms": max(20, max_latency_ms),
+            }
+        return {
+            "topology": "local-primary-global-failover",
+            "security": "mutual-tls-required",
+            "optimization": "active health checks + fast failover",
+            "region": region,
+            "target_rtt_ms": max(15, max_latency_ms),
+        }
 
     def recommend_transport(
         self,
