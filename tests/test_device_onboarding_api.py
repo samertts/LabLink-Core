@@ -68,6 +68,9 @@ def test_execute_endpoint_registers_device(monkeypatch) -> None:
             "required_mbps": 50,
             "max_latency_ms": 15,
             "distance_meters": 5,
+            "vendor_id": "0ABC",
+            "product_id": "00FE",
+            "model": "XN-1000",
         },
         headers=headers,
     )
@@ -94,9 +97,40 @@ def test_execute_endpoint_validates_tcp_requirements(monkeypatch) -> None:
             "required_mbps": 100,
             "max_latency_ms": 10,
             "distance_meters": 5,
+            "vendor_id": "0ABC",
+            "product_id": "00FE",
+            "model": "XN-1000",
         },
         headers=headers,
     )
 
     assert response.status_code == 400
     assert "host and port" in response.json()["detail"]
+
+
+def test_execute_endpoint_supports_dry_run_mode(monkeypatch) -> None:
+    monkeypatch.setattr(main, "device_manager", DummyDeviceManager(pool=ConnectionPool()))
+
+    client = TestClient(main.app)
+    headers = {"x-api-key": DEFAULT_API_KEY}
+    response = client.post(
+        "/devices/onboarding/execute",
+        json={
+            "device_id": "DEV-EXEC-DRY",
+            "connector_type": "serial",
+            "path": "/dev/ttyUSB0",
+            "os_name": "linux",
+            "supports_wireless": False,
+            "required_mbps": 20,
+            "max_latency_ms": 20,
+            "distance_meters": 5,
+            "vendor_id": "0ABC",
+            "product_id": "00FE",
+            "model": "XN-1000",
+            "dry_run": True,
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "planned"
