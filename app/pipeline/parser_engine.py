@@ -159,6 +159,20 @@ class ASTMMessageBuilder:
 class ParserEngine:
     """Backward-compatible single-line parser for simple ASTM-like samples."""
 
+    def __init__(self) -> None:
+        self._buffer = ""
+
+    def feed(self, chunk: str) -> list[ParsedResult]:
+        self._buffer += chunk
+        parsed: list[ParsedResult] = []
+        while "\n" in self._buffer:
+            line, self._buffer = self._buffer.split("\n", 1)
+            line = line.strip()
+            if not line:
+                continue
+            parsed.append(self.parse(line))
+        return parsed
+
     def parse(self, raw: str) -> ParsedResult:
         token = []
         fields: list[str] = []
