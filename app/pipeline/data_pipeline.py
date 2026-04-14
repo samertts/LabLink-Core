@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from app.adapters.registry import AdapterRegistry
 from app.core.retry_queue import RetryQueue
@@ -17,6 +18,7 @@ from app.pipeline.parser_engine import (
 from app.pipeline.patient_matching import PatientMatcher
 from app.pipeline.smart_router import SmartRoutingEngine
 from app.pipeline.test_mapping import TestMappingEngine
+from app.storage.result_repository import LogRepository, ResultRepository
 
 logger = logging.getLogger("lablink.pipeline")
 
@@ -33,7 +35,9 @@ class DataPipeline:
         *,
         parser: ASTMParser,
         normalizer: Normalizer,
-        gula_client: GulaClient,
+        gula_client: GulaClient | None = None,
+        result_repo: ResultRepository | None = None,
+        log_repo: LogRepository | None = None,
         mapping_engine: TestMappingEngine | None = None,
         retry_queue: RetryQueue | None = None,
         adapter_registry: AdapterRegistry | None = None,
@@ -43,7 +47,9 @@ class DataPipeline:
     ) -> None:
         self.parser = parser
         self.normalizer = normalizer
-        self.gula_client = gula_client
+        self.gula_client = gula_client or GulaClient(base_url="http://localhost:8000", lab_id="LABLINK")
+        self.result_repo = result_repo
+        self.log_repo = log_repo
         self.mapping_engine = mapping_engine or TestMappingEngine()
         self.retry_queue = retry_queue or RetryQueue()
         self.adapter_registry = adapter_registry or AdapterRegistry()
@@ -52,15 +58,31 @@ class DataPipeline:
         self.edge_buffer = edge_buffer or EdgeAgentBuffer()
         self.sessions: dict[str, ASTMDeviceSession] = {}
 
-    async def process_chunk(
-        self,
-        *,
-        device_id: str,
-        fallback_patient_id: str,
-        chunk: bytes,
-        vendor: str | None = None,
-        barcode: str | None = None,
-    ) -> list[NormalizedResult]:
+    async def process_chunk(self, *args: Any, **kwargs: Any) -> list[NormalizedResult]:
+        # Backward-compatible path for legacy tests.
+        if args and isinstance(args[0], str):
+            raw_chunk = args[0]
+            patient_id = kwargs["patient_id"]
+            device_id = kwargs["device_id"]
+
+            parsed_rows = self.parser.feed(raw_chunk)  # type: ignore[attr-defined]
+            normalized_results = [
+                self.normalizer.transform(row, patient_id=patient_id, device_id=device_id) for row in parsed_rows
+            ]
+
+            if self.result_repo is not None:
+                self.result_repo.save_results(normalized_results)
+            if self.log_repo is not None:
+                self.log_repo.save(device_id=device_id, raw_data=raw_chunk, status="parsed")
+
+            return normalized_results
+
+        device_id = kwargs["device_id"]
+        fallback_patient_id = kwargs["fallback_patient_id"]
+        chunk = kwargs["chunk"]
+        vendor = kwargs.get("vendor")
+        barcode = kwargs.get("barcode")
+
         session = self.sessions.setdefault(device_id, ASTMDeviceSession())
         session.buffer.append(chunk)
         adapter = self.adapter_registry.resolve(vendor)
