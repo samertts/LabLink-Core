@@ -9,13 +9,15 @@ from app.storage.db import InMemoryDB
 
 
 class ResultRepository:
-    def __init__(self, db: InMemoryDB) -> None:
-        self.db = db
+    def __init__(self, db: InMemoryDB | None = None) -> None:
+        self.db = db or InMemoryDB()
+        self._legacy_items: list[NormalizedResult] = []
 
     def save_results(self, results: list[NormalizedResult]) -> None:
         for result in results:
             row = asdict(result)
             self.db.results.append(row)
+            self._legacy_items.append(result)
             self.add_audit_event(
                 event_type="result_saved",
                 payload={
@@ -27,6 +29,14 @@ class ResultRepository:
 
     def list_results(self) -> list[dict]:
         return list(self.db.results)
+
+    # Backward-compatible API used by early phase tests.
+    def save(self, result: NormalizedResult) -> None:
+        self.save_results([result])
+
+    # Backward-compatible API used by early phase tests.
+    def list(self) -> list[NormalizedResult]:
+        return list(self._legacy_items)
 
     def save_log(self, *, device_id: str, raw_data: str, status: str, error_message: str = "") -> None:
         self.db.logs.append(
@@ -60,3 +70,23 @@ class ResultRepository:
 
     def list_audit_trail(self) -> list[dict]:
         return list(self.db.audit_trail)
+
+
+class LogRepository:
+    """Backward-compatible log repository for phase-1 tests."""
+
+    def __init__(self) -> None:
+        self._logs: list[dict[str, str]] = []
+
+    def save(self, *, device_id: str, raw_data: str, status: str, error_message: str = "") -> None:
+        self._logs.append(
+            {
+                "device_id": device_id,
+                "raw_data": raw_data,
+                "status": status,
+                "error_message": error_message,
+            }
+        )
+
+    def list(self) -> list[dict[str, str]]:
+        return list(self._logs)
