@@ -39,6 +39,8 @@ Phase-1..7 baseline now includes ASTM pipeline, device emulator, registry, adapt
   - Driver candidate discovery per OS (Windows/Linux)
   - Installation plan generator with secure validation steps
   - Wired/wireless transport recommendation for high-speed operation
+  - Safety gates before registration (minimum confidence + explicit generic-driver approval)
+  - `dry_run` mode to validate onboarding plan before live registration in healthcare environments
 
 - **API endpoints**
   - `POST /devices/register`

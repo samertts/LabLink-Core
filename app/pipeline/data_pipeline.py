@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from app.adapters.registry import AdapterRegistry
 from app.core.retry_queue import RetryQueue

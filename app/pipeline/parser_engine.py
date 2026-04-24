@@ -201,3 +201,17 @@ class ParserEngine:
             raise ParserError(f"Invalid numeric value: {fields[1]!r}") from exc
 
         return ParsedResult(test_code=fields[0], value=value, unit=fields[2])
+
+    def feed(self, chunk: str) -> list[ParsedResult]:
+        """Incrementally parse newline-delimited records for legacy pipeline tests."""
+        self._line_buffer += chunk
+        lines = self._line_buffer.split("\n")
+        self._line_buffer = lines.pop() if lines else ""
+
+        parsed: list[ParsedResult] = []
+        for line in lines:
+            cleaned = line.strip()
+            if not cleaned:
+                continue
+            parsed.append(self.parse(cleaned))
+        return parsed

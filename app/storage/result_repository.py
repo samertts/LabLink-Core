@@ -17,6 +17,7 @@ class ResultRepository:
         for result in results:
             row = asdict(result)
             self.db.results.append(row)
+            self._legacy_items.append(result)
             self.add_audit_event(
                 event_type="result_saved",
                 payload={

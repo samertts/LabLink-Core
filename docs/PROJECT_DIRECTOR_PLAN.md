@@ -59,3 +59,10 @@ Build a single, high-speed platform that unifies **lab devices** (CBC, chemistry
   https://hl7.org/fhir/
 - Microsoft driver deployment with PnPUtil:
   https://learn.microsoft.com/windows-hardware/drivers/devtest/pnputil-command-syntax
+
+## Go-Live Readiness Checklist (Healthcare Pilot)
+- Freeze device catalog and approved driver sources for pilot scope.
+- Execute onboarding in `dry_run` first, then require clinical engineering sign-off.
+- Enforce minimum identification confidence threshold before live registration.
+- Validate ASTM/HL7 loopback against real analyzers in isolated VLAN.
+- Confirm audit trail export for compliance and incident response.

@@ -115,10 +115,13 @@ class OnboardingExecuteRequest(DeviceScanRequest):
     baudrate: int = 9600
     vendor: str = "unknown"
     device_type: str = "unknown"
+    dry_run: bool = False
+    min_confidence: float = Field(default=0.7, ge=0.5, le=0.99)
+    allow_generic_driver: bool = False
 
 
 class OnboardingExecuteResponse(BaseModel):
-    status: Literal["registered"]
+    status: Literal["planned", "registered"]
     device_id: str
     scan: DeviceScanResponse
 
@@ -167,6 +170,10 @@ def list_registry(_auth: Auth) -> list[dict]:
 
 @app.post("/devices/onboarding/scan", response_model=DeviceScanResponse)
 def scan_device_onboarding(payload: DeviceScanRequest, _auth: Auth) -> DeviceScanResponse:
+    return _build_scan_response(payload)
+
+
+def _build_scan_response(payload: DeviceScanRequest) -> DeviceScanResponse:
     identity = onboarding_director.identify_device(
         DeviceFingerprint(
             vendor_id=payload.vendor_id,
@@ -205,14 +212,17 @@ def scan_device_onboarding(payload: DeviceScanRequest, _auth: Auth) -> DeviceSca
 
 @app.post("/devices/onboarding/execute", response_model=OnboardingExecuteResponse)
 def execute_device_onboarding(payload: OnboardingExecuteRequest, _auth: Auth) -> OnboardingExecuteResponse:
-    identity = onboarding_director.identify_device(
-        DeviceFingerprint(
-            vendor_id=payload.vendor_id,
-            product_id=payload.product_id,
-            manufacturer=payload.manufacturer,
-            model=payload.model,
-            device_class=payload.device_class,
-            protocol_hint=payload.protocol_hint,
+    scan = _build_scan_response(payload)
+    if scan.confidence < payload.min_confidence:
+        raise HTTPException(
+            status_code=400,
+            detail=f"device confidence {scan.confidence:.2f} is below required threshold {payload.min_confidence:.2f}",
+        )
+    uses_generic = any(item["source"] == "os-default" for item in scan.driver_candidates)
+    if uses_generic and not payload.allow_generic_driver:
+        raise HTTPException(
+            status_code=400,
+            detail="generic driver requires explicit approval via allow_generic_driver=true",
         )
     )
     drivers = onboarding_director.driver_candidates(payload.os_name, identity["protocol"])
@@ -234,7 +244,7 @@ def execute_device_onboarding(payload: OnboardingExecuteRequest, _auth: Auth) ->
         "type": payload.connector_type,
         "vendor": payload.vendor,
         "device_type": payload.device_type,
-        "protocol": str(identity["protocol"]),
+        "protocol": scan.protocol,
         "baudrate": payload.baudrate,
     }
     if payload.connector_type == "tcp":
@@ -246,6 +256,18 @@ def execute_device_onboarding(payload: OnboardingExecuteRequest, _auth: Auth) ->
         if payload.path is None:
             raise HTTPException(status_code=400, detail="path is required for serial connector")
         config["path"] = payload.path
+
+    if payload.dry_run:
+        repository.add_audit_event(
+            event_type="device_onboarding_planned",
+            payload={
+                "device_id": payload.device_id,
+                "protocol": scan.protocol,
+                "confidence": scan.confidence,
+                "transport": scan.transport,
+            },
+        )
+        return OnboardingExecuteResponse(status="planned", device_id=payload.device_id, scan=scan)
 
     try:
         device_manager.add_device(config)
