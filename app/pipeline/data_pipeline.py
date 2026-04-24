@@ -12,6 +12,7 @@ from app.pipeline.parser_engine import (
     ASTMBuffer,
     ASTMMessageBuilder,
     ASTMParser,
+    ParserEngine,
     ParsedResult,
     validate_checksum,
 )
@@ -33,56 +34,44 @@ class DataPipeline:
     def __init__(
         self,
         *,
-        parser: ASTMParser,
+        parser: ASTMParser | ParserEngine,
         normalizer: Normalizer,
         gula_client: GulaClient | None = None,
-        result_repo: ResultRepository | None = None,
-        log_repo: LogRepository | None = None,
         mapping_engine: TestMappingEngine | None = None,
         retry_queue: RetryQueue | None = None,
         adapter_registry: AdapterRegistry | None = None,
         patient_matcher: PatientMatcher | None = None,
         router: SmartRoutingEngine | None = None,
         edge_buffer: EdgeAgentBuffer | None = None,
+        result_repo: ResultRepository | None = None,
+        log_repo: LogRepository | None = None,
     ) -> None:
         self.parser = parser
         self.normalizer = normalizer
-        self.gula_client = gula_client or GulaClient(base_url="http://localhost:8000", lab_id="LABLINK")
-        self.result_repo = result_repo
-        self.log_repo = log_repo
+        self.gula_client = gula_client or GulaClient(base_url="http://gula.local", lab_id="LAB001")
         self.mapping_engine = mapping_engine or TestMappingEngine()
         self.retry_queue = retry_queue or RetryQueue()
         self.adapter_registry = adapter_registry or AdapterRegistry()
         self.patient_matcher = patient_matcher or PatientMatcher()
         self.router = router or SmartRoutingEngine()
         self.edge_buffer = edge_buffer or EdgeAgentBuffer()
+        self.result_repo = result_repo or ResultRepository()
+        self.log_repo = log_repo or LogRepository()
         self.sessions: dict[str, ASTMDeviceSession] = {}
 
-    async def process_chunk(self, *args: Any, **kwargs: Any) -> list[NormalizedResult]:
-        # Backward-compatible path for legacy tests.
-        if args and isinstance(args[0], str):
-            raw_chunk = args[0]
-            patient_id = kwargs["patient_id"]
-            device_id = kwargs["device_id"]
+    async def process_chunk(
+        self,
+        chunk: bytes | str,
+        device_id: str,
+        fallback_patient_id: str | None = None,
+        patient_id: str | None = None,
+        vendor: str | None = None,
+        barcode: str | None = None,
+    ) -> list[NormalizedResult]:
+        if isinstance(chunk, str):
+            return self._process_legacy_chunk(chunk=chunk, patient_id=patient_id, device_id=device_id)
 
-            parsed_rows = self.parser.feed(raw_chunk)  # type: ignore[attr-defined]
-            normalized_results = [
-                self.normalizer.transform(row, patient_id=patient_id, device_id=device_id) for row in parsed_rows
-            ]
-
-            if self.result_repo is not None:
-                self.result_repo.save_results(normalized_results)
-            if self.log_repo is not None:
-                self.log_repo.save(device_id=device_id, raw_data=raw_chunk, status="parsed")
-
-            return normalized_results
-
-        device_id = kwargs["device_id"]
-        fallback_patient_id = kwargs["fallback_patient_id"]
-        chunk = kwargs["chunk"]
-        vendor = kwargs.get("vendor")
-        barcode = kwargs.get("barcode")
-
+        resolved_patient_id = fallback_patient_id or patient_id or "UNKNOWN"
         session = self.sessions.setdefault(device_id, ASTMDeviceSession())
         session.buffer.append(chunk)
         adapter = self.adapter_registry.resolve(vendor)
@@ -101,7 +90,7 @@ class DataPipeline:
                     canonical = self.mapping_engine.canonical_code(row["test_code"])
                     patient_id = self.patient_matcher.resolve_patient_id(
                         row_patient_id=row["patient_id"],
-                        fallback_patient_id=fallback_patient_id,
+                        fallback_patient_id=resolved_patient_id,
                         barcode=barcode,
                     )
                     parsed = ParsedResult(
@@ -120,6 +109,15 @@ class DataPipeline:
 
         if not normalized_results:
             return normalized_results
+
+        self.result_repo.save_results(normalized_results)
+        self.log_repo.save(
+            {
+                "device_id": device_id,
+                "raw_data": chunk.decode("ascii", errors="ignore"),
+                "status": "processed",
+            }
+        )
 
         decision = self.router.decide(device_id=device_id, results=normalized_results)
 
@@ -145,6 +143,31 @@ class DataPipeline:
                 {
                     "device_id": device_id,
                     "results": [r.test_code for r in normalized_results],
+                }
+            )
+
+        return normalized_results
+
+    def _process_legacy_chunk(self, *, chunk: str, patient_id: str | None, device_id: str) -> list[NormalizedResult]:
+        if not isinstance(self.parser, ParserEngine):
+            raise TypeError("Legacy string chunk flow requires ParserEngine")
+
+        normalized_results: list[NormalizedResult] = []
+        for parsed in self.parser.feed(chunk):
+            normalized = self.normalizer.transform(
+                parsed,
+                patient_id=patient_id or "UNKNOWN",
+                device_id=device_id,
+            )
+            normalized_results.append(normalized)
+
+        if normalized_results:
+            self.result_repo.save_results(normalized_results)
+            self.log_repo.save(
+                {
+                    "device_id": device_id,
+                    "raw_data": chunk,
+                    "status": "processed",
                 }
             )
 

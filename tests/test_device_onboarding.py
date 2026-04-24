@@ -37,3 +37,29 @@ def test_recommend_transport_for_low_latency_prefers_wired() -> None:
 
     assert recommendation["mode"] == "wired"
     assert recommendation["technology"] == "ethernet-1g"
+
+
+def test_protocol_aliases_and_macos_global_driver_candidates() -> None:
+    director = DeviceOnboardingDirector()
+    identity = director.identify_device(DeviceFingerprint(protocol_hint="hl7v2"))
+    drivers = director.driver_candidates("macos", identity["protocol"])
+
+    assert identity["protocol"] == "HL7"
+    assert any(d["name"] == "HL7/FHIR Bridge Agent" for d in drivers)
+
+
+def test_connectivity_profile_for_global_and_hybrid_targets() -> None:
+    director = DeviceOnboardingDirector()
+    global_profile = director.connectivity_profile(
+        deployment_target="global",
+        region="eu-west",
+        max_latency_ms=40,
+    )
+    hybrid_profile = director.connectivity_profile(
+        deployment_target="hybrid",
+        region="mena",
+        max_latency_ms=15,
+    )
+
+    assert global_profile["topology"] == "regional-edge-relay"
+    assert hybrid_profile["topology"] == "local-primary-global-failover"

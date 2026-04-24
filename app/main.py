@@ -80,11 +80,13 @@ class ModeRequest(BaseModel):
 
 
 class DeviceScanRequest(BaseModel):
-    os_name: Literal["windows", "linux"]
+    os_name: Literal["windows", "linux", "macos"]
     supports_wireless: bool = True
     required_mbps: int = Field(default=50, ge=1, le=10_000)
     max_latency_ms: int = Field(default=20, ge=1, le=1_000)
     distance_meters: int = Field(default=10, ge=1, le=200)
+    deployment_target: Literal["local", "global", "hybrid"] = "hybrid"
+    region: str = Field(default="global", min_length=2, max_length=32)
     protocol_hint: str = "ASTM"
     vendor_id: str | None = None
     product_id: str | None = None
@@ -101,6 +103,7 @@ class DeviceScanResponse(BaseModel):
     driver_candidates: list[dict[str, str]]
     install_plan: list[str]
     transport: dict[str, str | int]
+    connectivity_profile: dict[str, str | int]
 
 
 class OnboardingExecuteRequest(DeviceScanRequest):
@@ -189,6 +192,11 @@ def _build_scan_response(payload: DeviceScanRequest) -> DeviceScanResponse:
         max_latency_ms=payload.max_latency_ms,
         distance_meters=payload.distance_meters,
     )
+    connectivity_profile = onboarding_director.connectivity_profile(
+        deployment_target=payload.deployment_target,
+        region=payload.region,
+        max_latency_ms=payload.max_latency_ms,
+    )
 
     return DeviceScanResponse(
         identity=str(identity["identity"]),
@@ -198,6 +206,7 @@ def _build_scan_response(payload: DeviceScanRequest) -> DeviceScanResponse:
         driver_candidates=drivers,
         install_plan=plan,
         transport=transport,
+        connectivity_profile=connectivity_profile,
     )
 
 
@@ -215,6 +224,20 @@ def execute_device_onboarding(payload: OnboardingExecuteRequest, _auth: Auth) ->
             status_code=400,
             detail="generic driver requires explicit approval via allow_generic_driver=true",
         )
+    )
+    drivers = onboarding_director.driver_candidates(payload.os_name, identity["protocol"])
+    plan = onboarding_director.install_plan(payload.os_name, identity["protocol"])
+    transport = onboarding_director.recommend_transport(
+        supports_wireless=payload.supports_wireless,
+        required_mbps=payload.required_mbps,
+        max_latency_ms=payload.max_latency_ms,
+        distance_meters=payload.distance_meters,
+    )
+    connectivity_profile = onboarding_director.connectivity_profile(
+        deployment_target=payload.deployment_target,
+        region=payload.region,
+        max_latency_ms=payload.max_latency_ms,
+    )
 
     config = {
         "device_id": payload.device_id,
@@ -251,15 +274,15 @@ def execute_device_onboarding(payload: OnboardingExecuteRequest, _auth: Auth) ->
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    repository.add_audit_event(
-        event_type="device_onboarding_registered",
-        payload={
-            "device_id": payload.device_id,
-            "protocol": scan.protocol,
-            "confidence": scan.confidence,
-            "transport": scan.transport,
-            "connector_type": payload.connector_type,
-        },
+    scan = DeviceScanResponse(
+        identity=str(identity["identity"]),
+        protocol=str(identity["protocol"]),
+        device_class=str(identity["device_class"]),
+        confidence=float(identity["confidence"]),
+        driver_candidates=drivers,
+        install_plan=plan,
+        transport=transport,
+        connectivity_profile=connectivity_profile,
     )
     return OnboardingExecuteResponse(status="registered", device_id=payload.device_id, scan=scan)
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Any
 
 from app.pipeline.normalizer import NormalizedResult
@@ -11,7 +12,6 @@ from app.storage.db import InMemoryDB
 class ResultRepository:
     def __init__(self, db: InMemoryDB | None = None) -> None:
         self.db = db or InMemoryDB()
-        self._legacy_items: list[NormalizedResult] = []
 
     def save_results(self, results: list[NormalizedResult]) -> None:
         for result in results:
@@ -30,13 +30,13 @@ class ResultRepository:
     def list_results(self) -> list[dict]:
         return list(self.db.results)
 
-    # Backward-compatible API used by early phase tests.
+    # Backward-compatible alias used by early phase tests.
+    def list(self) -> list[Any]:
+        return [SimpleNamespace(**row) for row in self.list_results()]
+
+    # Backward-compatible single-item insert used by early phase flows.
     def save(self, result: NormalizedResult) -> None:
         self.save_results([result])
-
-    # Backward-compatible API used by early phase tests.
-    def list(self) -> list[NormalizedResult]:
-        return list(self._legacy_items)
 
     def save_log(self, *, device_id: str, raw_data: str, status: str, error_message: str = "") -> None:
         self.db.logs.append(
@@ -73,20 +73,20 @@ class ResultRepository:
 
 
 class LogRepository:
-    """Backward-compatible log repository for phase-1 tests."""
+    """Backward-compatible repository facade for log persistence."""
 
-    def __init__(self) -> None:
-        self._logs: list[dict[str, str]] = []
+    def __init__(self, db: InMemoryDB | None = None) -> None:
+        self.db = db or InMemoryDB()
 
-    def save(self, *, device_id: str, raw_data: str, status: str, error_message: str = "") -> None:
-        self._logs.append(
-            {
-                "device_id": device_id,
-                "raw_data": raw_data,
-                "status": status,
-                "error_message": error_message,
-            }
-        )
+    def save(self, entry: dict[str, Any]) -> None:
+        payload = {
+            "device_id": entry.get("device_id", ""),
+            "raw_data": entry.get("raw_data", ""),
+            "status": entry.get("status", ""),
+            "error_message": entry.get("error_message", ""),
+            "timestamp": entry.get("timestamp", datetime.now(timezone.utc).isoformat()),
+        }
+        self.db.logs.append(payload)
 
-    def list(self) -> list[dict[str, str]]:
-        return list(self._logs)
+    def list(self) -> list[dict]:
+        return list(self.db.logs)
