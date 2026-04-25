@@ -66,6 +66,12 @@ export LABLINK_API_KEY=lablink-dev-key
 uvicorn app.main:app --reload
 ```
 
+Or using Make:
+
+```bash
+make run
+```
+
 ## Run Device Emulator
 
 ```bash
@@ -76,6 +82,12 @@ python -m app.emulator.tcp_device_emulator
 
 ```bash
 pytest -q
+```
+
+## Smoke Check (Run + Verify)
+
+```bash
+make smoke
 ```
 
 

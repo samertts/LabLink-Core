@@ -12,6 +12,7 @@ from app.storage.db import InMemoryDB
 class ResultRepository:
     def __init__(self, db: InMemoryDB | None = None) -> None:
         self.db = db or InMemoryDB()
+        self._legacy_items: list[NormalizedResult] = []
 
     def save_results(self, results: list[NormalizedResult]) -> None:
         for result in results:
@@ -32,6 +33,8 @@ class ResultRepository:
 
     # Backward-compatible alias used by early phase tests.
     def list(self) -> list[Any]:
+        if self._legacy_items:
+            return list(self._legacy_items)
         return [SimpleNamespace(**row) for row in self.list_results()]
 
     # Backward-compatible single-item insert used by early phase flows.
