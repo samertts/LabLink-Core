@@ -63,3 +63,17 @@ def test_connectivity_profile_for_global_and_hybrid_targets() -> None:
 
     assert global_profile["topology"] == "regional-edge-relay"
     assert hybrid_profile["topology"] == "local-primary-global-failover"
+
+
+def test_quick_link_profile_supports_non_oem_devices() -> None:
+    director = DeviceOnboardingDirector()
+    profile = director.quick_link_profile(
+        os_name="linux",
+        protocol="bluetooth",
+        supports_wireless=True,
+        is_non_oem=True,
+    )
+
+    assert profile["profile"] == "quick-link"
+    assert profile["compatibility_mode"] == "extended-generic"
+    assert profile["wireless_boost"] is True

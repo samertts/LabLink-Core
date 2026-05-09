@@ -50,7 +50,32 @@ def test_scan_endpoint_returns_plan() -> None:
     assert body["protocol"] == "ASTM"
     assert body["transport"]["technology"] == "wifi-6e"
     assert body["connectivity_profile"]["topology"] == "local-primary-global-failover"
+    assert body["quick_link"]["profile"] == "quick-link"
     assert len(body["install_plan"]) >= 4
+
+
+def test_scan_endpoint_enables_non_oem_quick_link_profile() -> None:
+    client = TestClient(main.app)
+    headers = {"x-api-key": DEFAULT_API_KEY}
+
+    response = client.post(
+        "/devices/onboarding/scan",
+        json={
+            "os_name": "linux",
+            "supports_wireless": True,
+            "required_mbps": 70,
+            "max_latency_ms": 30,
+            "distance_meters": 15,
+            "protocol_hint": "bluetooth",
+            "is_non_oem": True,
+        },
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["quick_link"]["compatibility_mode"] == "extended-generic"
+    assert body["quick_link"]["wireless_boost"] is True
 
 
 def test_execute_endpoint_registers_device(monkeypatch) -> None:
