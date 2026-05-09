@@ -93,6 +93,8 @@ class DeviceOnboardingDirector:
             "FHIR-R4": "FHIR",
             "HTTPS": "REST",
             "HTTP": "REST",
+            "BLUETOOTH": "BLE",
+            "BLUETOOTH-LE": "BLE",
         }
 
     def identify_device(self, fingerprint: DeviceFingerprint) -> dict[str, str | float]:
@@ -145,6 +147,38 @@ class DeviceOnboardingDirector:
                 }
             )
         return matches
+
+    def quick_link_profile(
+        self,
+        *,
+        os_name: Literal["windows", "linux", "macos"],
+        protocol: str,
+        supports_wireless: bool,
+        is_non_oem: bool = False,
+    ) -> dict[str, str | bool | int]:
+        normalized = self._normalize_protocol(protocol)
+        fast_drivers = self.driver_candidates(os_name, normalized)
+        compatibility_mode = "strict-oem"
+        if is_non_oem:
+            compatibility_mode = "extended-generic"
+            if not any(d["source"] == "os-default" for d in fast_drivers):
+                fast_drivers.append(
+                    {
+                        "name": "Generic Compatibility Bridge",
+                        "source": "os-default",
+                        "install_hint": "use default signed OS driver + compatibility profile",
+                    }
+                )
+
+        wireless_boost = supports_wireless and normalized in {"ASTM", "HL7", "FHIR", "REST", "BLE"}
+        return {
+            "profile": "quick-link",
+            "compatibility_mode": compatibility_mode,
+            "zero_touch_pairing": True,
+            "wireless_boost": wireless_boost,
+            "recommended_poll_interval_ms": 300 if wireless_boost else 500,
+            "driver_count": len(fast_drivers),
+        }
 
     def install_plan(self, os_name: Literal["windows", "linux", "macos"], protocol: str) -> list[str]:
         candidates = self.driver_candidates(os_name=os_name, protocol=protocol)

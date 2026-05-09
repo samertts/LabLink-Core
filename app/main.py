@@ -93,6 +93,7 @@ class DeviceScanRequest(BaseModel):
     manufacturer: str | None = None
     model: str | None = None
     device_class: str | None = None
+    is_non_oem: bool = False
 
 
 class DeviceScanResponse(BaseModel):
@@ -104,6 +105,7 @@ class DeviceScanResponse(BaseModel):
     install_plan: list[str]
     transport: dict[str, str | int]
     connectivity_profile: dict[str, str | int]
+    quick_link: dict[str, str | bool | int]
 
 
 class OnboardingExecuteRequest(DeviceScanRequest):
@@ -197,6 +199,12 @@ def _build_scan_response(payload: DeviceScanRequest) -> DeviceScanResponse:
         region=payload.region,
         max_latency_ms=payload.max_latency_ms,
     )
+    quick_link = onboarding_director.quick_link_profile(
+        os_name=payload.os_name,
+        protocol=str(identity["protocol"]),
+        supports_wireless=payload.supports_wireless,
+        is_non_oem=payload.is_non_oem,
+    )
 
     return DeviceScanResponse(
         identity=str(identity["identity"]),
@@ -207,6 +215,7 @@ def _build_scan_response(payload: DeviceScanRequest) -> DeviceScanResponse:
         install_plan=plan,
         transport=transport,
         connectivity_profile=connectivity_profile,
+        quick_link=quick_link,
     )
 
 
