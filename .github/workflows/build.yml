@@ -1,0 +1,70 @@
+name: Build Windows Desktop
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate required files
+        shell: pwsh
+        run: |
+          if (!(Test-Path requirements.txt)) { throw "Missing requirements.txt" }
+          if (!(Test-Path main.py)) { throw "Missing main.py entrypoint" }
+          if (!(Test-Path installer/setup.iss)) { throw "Missing installer/setup.iss" }
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Startup validation smoke
+        run: |
+          python -c "from app.validation.startup import validate_runtime; r=validate_runtime(); print(r); raise SystemExit(0 if r.ok else 1)"
+
+      - name: Run tests
+        run: |
+          pytest -q
+
+      - name: Generate diagnostics
+        run: |
+          python -c "from app.recovery.diagnostics import write_diagnostics; print(write_diagnostics())"
+
+      - name: Build executable
+        run: |
+          pyinstaller --noconfirm --clean --onefile --windowed --name Application main.py
+
+      - name: Verify executable
+        shell: pwsh
+        run: |
+          if (!(Test-Path dist/Application.exe)) { throw "Executable missing" }
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          iscc installer/setup.iss
+
+      - name: Verify installer
+        shell: pwsh
+        run: |
+          if (!(Test-Path installer/Output/ApplicationSetup.exe)) { throw "Installer missing" }
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: lablink-windows-artifacts
+          path: |
+            dist/Application.exe
+            installer/Output/ApplicationSetup.exe
