@@ -8,7 +8,7 @@ from app.validation.startup import validate_runtime
 
 def main() -> int:
     logger = configure_logging()
-    runtime = validate_runtime()
+    runtime = validate_runtime(profile="desktop")
     if not runtime.ok:
         logger.error("Startup dependency validation failed: %s", runtime.errors)
         return 2

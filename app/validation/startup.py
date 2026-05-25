@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 from dataclasses import dataclass
+from typing import Literal
 
 
 @dataclass
@@ -10,9 +11,13 @@ class ValidationResult:
     errors: list[str]
 
 
-def validate_runtime() -> ValidationResult:
+def validate_runtime(profile: Literal["core", "desktop"] = "desktop") -> ValidationResult:
     errors: list[str] = []
-    for mod in ("fastapi", "uvicorn", "pydantic", "httpx", "PySide6"):
+    modules = ["fastapi", "uvicorn", "pydantic", "httpx"]
+    if profile == "desktop":
+        modules.append("PySide6")
+
+    for mod in modules:
         try:
             importlib.import_module(mod)
         except Exception as exc:  # pragma: no cover

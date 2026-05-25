@@ -35,8 +35,10 @@ def ensure_runtime_files() -> RepairReport:
 
     try:
         conn = sqlite3.connect(RUNTIME_DB)
-        conn.execute("PRAGMA integrity_check")
+        result = conn.execute("PRAGMA integrity_check").fetchone()
         conn.close()
+        if not result or result[0] != "ok":
+            warnings.append(f"database_integrity_warning:{result}")
     except sqlite3.DatabaseError as exc:
         warnings.append(f"database_integrity_warning:{exc}")
 
