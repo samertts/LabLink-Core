@@ -94,3 +94,53 @@ make smoke
 ## Project Manager Blueprint
 
 See `docs/PROJECT_DIRECTOR_PLAN.md` for the world-class rollout strategy and research references.
+
+## Desktop Production Runtime
+
+This project now includes a Windows desktop runtime that wraps the existing LabLink API stack without replacing current business logic.
+
+### Run Desktop App
+
+```bash
+pip install -r requirements.txt
+python main.py
+```
+
+The desktop shell performs:
+- Startup validation (dependencies/platform)
+- Runtime auto-repair (storage folders, config, SQLite bootstrap)
+- Structured logging to `storage/logs/app.log` and `storage/logs/crash.log`
+- One-click local API startup at `http://127.0.0.1:8000`
+
+## Windows Build + Installer
+
+### Build EXE locally
+
+```bash
+pyinstaller --noconfirm --clean --onefile --windowed --name Application main.py
+```
+
+### Build Setup.exe locally
+
+```bash
+iscc installer/setup.iss
+```
+
+Expected outputs:
+- `dist/Application.exe`
+- `installer/Output/ApplicationSetup.exe`
+
+## CI/CD
+
+GitHub Actions workflow `.github/workflows/build.yml` builds and validates both EXE and installer on `windows-latest` for:
+- push to `main`
+- pull requests
+- tags matching `v*`
+
+## Recovery and Diagnostics
+
+- Auto-creates missing storage folders and runtime config/database.
+- Performs SQLite integrity check at startup.
+- Writes repair events and runtime diagnostics into desktop log viewer and rotating log files.
+
+- Generates machine-readable diagnostics at `storage/logs/diagnostics.json`.

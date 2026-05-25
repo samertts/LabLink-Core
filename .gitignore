@@ -2,3 +2,6 @@ __pycache__/
 *.pyc
 .venv/
 .pytest_cache/
+storage/data/*.db
+storage/logs/*.json
+storage/runtime_config.json
