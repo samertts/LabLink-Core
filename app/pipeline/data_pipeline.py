@@ -11,8 +11,8 @@ from app.pipeline.parser_engine import (
     ASTMBuffer,
     ASTMMessageBuilder,
     ASTMParser,
-    ParserEngine,
     ParsedResult,
+    ParserEngine,
     validate_checksum,
 )
 from app.pipeline.patient_matching import PatientMatcher

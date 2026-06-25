@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
-from collections.abc import Callable
 import logging
 import socket
 import threading
 import time
+from abc import ABC, abstractmethod
+from collections.abc import Callable
 
 from app.pipeline.parser_engine import ACK, ENQ, EOT
 

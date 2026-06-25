@@ -165,6 +165,7 @@ class TestASTMBuilderReset:
 class TestInputValidation:
     def test_command_validation_rejects_long_command(self) -> None:
         from fastapi.testclient import TestClient
+
         from app.main import app
         from app.security.auth import _get_or_generate_api_key
 
@@ -180,6 +181,7 @@ class TestInputValidation:
 
     def test_command_validation_rejects_special_chars(self) -> None:
         from fastapi.testclient import TestClient
+
         from app.main import app
         from app.security.auth import _get_or_generate_api_key
 
@@ -196,6 +198,7 @@ class TestInputValidation:
 class TestHealthEndpoint:
     def test_health_returns_version_and_checks(self) -> None:
         from fastapi.testclient import TestClient
+
         from app.main import app
 
         client = TestClient(app)
@@ -210,6 +213,7 @@ class TestHealthEndpoint:
 class TestPagination:
     def test_results_pagination(self) -> None:
         from fastapi.testclient import TestClient
+
         from app.main import app
         from app.security.auth import _get_or_generate_api_key
 
@@ -223,6 +227,7 @@ class TestPagination:
 class TestRateLimiter:
     def test_rate_limit_allows_normal_traffic(self) -> None:
         from fastapi.testclient import TestClient
+
         from app.main import app
 
         client = TestClient(app)

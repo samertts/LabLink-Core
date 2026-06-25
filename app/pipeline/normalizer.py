@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 
 from app.pipeline.parser_engine import ParsedResult
 
-
 TEST_NAME_MAP = {
     "HEMOGLOBIN": "Hemoglobin",
     "HB": "Hemoglobin",

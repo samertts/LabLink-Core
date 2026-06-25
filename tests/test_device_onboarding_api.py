@@ -3,21 +3,21 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 import app.main as main
+from app.config.settings import AppSettings
 from app.core.alerting import AlertManager
 from app.core.connection_pool import ConnectionPool
 from app.core.device_manager import DeviceManager
 from app.core.device_onboarding import DeviceOnboardingDirector
+from app.events.base import EventBus
+from app.observability.metrics import MetricsCollector
+from app.observability.tracing import Tracer
 from app.security.auth import _get_or_generate_api_key
 from app.services.device_service import DeviceService
 from app.services.query_service import QueryService
 from app.services.service_container import ServiceContainer
 from app.storage.db import InMemoryDB
 from app.storage.result_repository import LogRepository, ResultRepository
-from app.events.base import EventBus
-from app.observability.metrics import MetricsCollector
-from app.observability.tracing import Tracer
 from app.tasks.worker import BackgroundWorker
-from app.config.settings import AppSettings
 
 
 class FakeConnector:

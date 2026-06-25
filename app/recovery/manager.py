@@ -13,8 +13,8 @@ class RepairReport:
 
 
 def ensure_runtime_files() -> RepairReport:
-    from app.storage.db import InMemoryDB
     from app.settings.paths import DATA_DIR
+    from app.storage.db import InMemoryDB
 
     repaired: list[str] = []
     warnings: list[str] = []
