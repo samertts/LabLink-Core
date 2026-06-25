@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.backup.engine import BackupEngine
 from app.config.settings import AppSettings, get_settings
 from app.core.alerting import AlertManager
 from app.core.device_manager import DeviceManager
@@ -48,6 +49,7 @@ class ServiceContainer:
     tracer: Tracer
     worker: BackgroundWorker
     plugin_manager: PluginManager
+    backup_engine: BackupEngine
 
 
 def create_service_container(settings: AppSettings | None = None) -> ServiceContainer:
@@ -106,6 +108,8 @@ def create_service_container(settings: AppSettings | None = None) -> ServiceCont
         platform_version=settings.version,
     )
 
+    backup_engine = BackupEngine(db_path=settings.effective_db_path)
+
     return ServiceContainer(
         settings=settings,
         db=db,
@@ -123,4 +127,5 @@ def create_service_container(settings: AppSettings | None = None) -> ServiceCont
         tracer=tracer,
         worker=worker,
         plugin_manager=plugin_manager,
+        backup_engine=backup_engine,
     )

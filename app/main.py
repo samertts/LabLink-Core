@@ -739,3 +739,74 @@ def get_security_audit(user: CurrentUser, limit: int = 100) -> list[dict]:
         raise HTTPException(status_code=403, detail="Missing permission: audit:read")
     log = get_audit_log()
     return [e.to_dict() for e in log.query(limit=limit)]
+
+
+# ── Backup & Recovery Endpoints ────────────────────────────────────
+
+
+class BackupCreateRequest(BaseModel):
+    backup_type: Literal["full", "incremental", "snapshot"] = "full"
+    tables: list[str] | None = None
+    compression: Literal["none", "gzip"] = "none"
+
+
+@app.get("/backups")
+def list_backups(_auth: Auth) -> list[dict]:
+    container = _get_container()
+    return container.backup_engine.list_backups()
+
+
+@app.get("/backups/summary")
+def backup_summary(_auth: Auth) -> dict:
+    container = _get_container()
+    return container.backup_engine.summary()
+
+
+@app.post("/backups")
+def create_backup(payload: BackupCreateRequest, _auth: Auth) -> dict:
+    from app.backup.models import BackupType
+    container = _get_container()
+    bt = BackupType(payload.backup_type)
+    manifest = container.backup_engine.create_backup(backup_type=bt, tables=payload.tables, compression=payload.compression)
+    return manifest.to_dict()
+
+
+@app.get("/backups/{backup_id}")
+def get_backup(backup_id: str, _auth: Auth) -> dict:
+    container = _get_container()
+    manifest = container.backup_engine.get_manifest(backup_id)
+    if manifest is None:
+        raise HTTPException(status_code=404, detail=f"Backup '{backup_id}' not found")
+    return manifest.to_dict()
+
+
+@app.post("/backups/{backup_id}/restore")
+def restore_backup(backup_id: str, _auth: Auth) -> dict:
+    container = _get_container()
+    result = container.backup_engine.restore_backup(backup_id)
+    if not result.success:
+        raise HTTPException(status_code=400, detail=result.error)
+    return result.to_dict()
+
+
+@app.post("/backups/{backup_id}/verify")
+def verify_backup(backup_id: str, _auth: Auth) -> dict[str, bool]:
+    container = _get_container()
+    ok = container.backup_engine.verify_backup(backup_id)
+    return {"verified": ok}
+
+
+@app.delete("/backups/{backup_id}")
+def delete_backup(backup_id: str, _auth: Auth) -> dict[str, str]:
+    container = _get_container()
+    deleted = container.backup_engine.delete_backup(backup_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Backup '{backup_id}' not found")
+    return {"status": "deleted", "backup_id": backup_id}
+
+
+@app.post("/backups/retention")
+def enforce_retention(_auth: Auth) -> dict:
+    container = _get_container()
+    deleted = container.backup_engine.enforce_retention()
+    return {"deleted": deleted, "count": len(deleted)}
