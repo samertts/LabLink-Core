@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import logging
+import time
 from contextlib import asynccontextmanager
 from typing import Annotated, Literal
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -13,6 +14,8 @@ from app.core.modes import CommunicationMode
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.pipeline.normalizer import NormalizedResult
 from app.security.auth import verify_api_key
+from app.security.models import Permission
+from app.security.rbac import CurrentUser
 from app.services.service_container import ServiceContainer, create_service_container
 
 logging.basicConfig(level=logging.INFO)
@@ -518,3 +521,201 @@ def set_plugin_config(name: str, payload: PluginConfigRequest, _auth: Auth) -> d
         raise HTTPException(status_code=404, detail=f"Plugin '{name}' not found")
     container.plugin_manager.set_plugin_config(name, payload.key, payload.value)
     return {"status": "updated", "plugin": name, "key": payload.key}
+
+
+# ── Auth & RBAC Endpoints ─────────────────────────────────────────
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=64)
+    password: str = Field(min_length=1, max_length=128)
+
+
+class RegisterRequest(BaseModel):
+    username: str = Field(min_length=3, max_length=64, pattern=r"^[a-zA-Z0-9_\-\.]+$")
+    password: str = Field(min_length=6, max_length=128)
+    roles: list[str] | None = None
+
+
+class ChangePasswordRequest(BaseModel):
+    old_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=6, max_length=128)
+
+
+class CreateRoleRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    permissions: list[str] = Field(default_factory=list)
+    description: str = ""
+
+
+@app.post("/auth/login")
+def login(payload: LoginRequest, request: Request) -> dict:
+    from app.security.audit import AuditEventType, log_auth_event
+    from app.security.models import get_security_store
+    from app.security.passwords import verify_password
+    from app.security.tokens import create_token_pair
+
+    store = get_security_store()
+    user = store.get_user_by_username(payload.username)
+    ip = request.client.host if request.client else ""
+    ua = request.headers.get("user-agent", "")
+
+    if user is None or not user.is_active:
+        log_auth_event(AuditEventType.LOGIN_FAILURE, payload.username, ip_address=ip, user_agent=ua, success=False)
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    if user.locked_until and user.locked_until > time.time():
+        log_auth_event(AuditEventType.LOGIN_FAILURE, payload.username, detail={"reason": "account_locked"}, ip_address=ip, user_agent=ua, success=False)
+        raise HTTPException(status_code=423, detail="Account is locked")
+
+    if not verify_password(payload.password, user.hashed_password):
+        user.failed_login_attempts += 1
+        if user.failed_login_attempts >= 5:
+            user.locked_until = time.time() + 900  # 15 min
+            log_auth_event(AuditEventType.USER_LOCKED, user.user_id, ip_address=ip, user_agent=ua)
+        log_auth_event(AuditEventType.LOGIN_FAILURE, user.user_id, ip_address=ip, user_agent=ua, success=False)
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    user.last_login = time.time()
+
+    tokens = create_token_pair(user.user_id, user.roles)
+    log_auth_event(AuditEventType.LOGIN_SUCCESS, user.user_id, ip_address=ip, user_agent=ua)
+
+    return {
+        "access_token": tokens.access_token,
+        "refresh_token": tokens.refresh_token,
+        "token_type": tokens.token_type,
+        "expires_in": tokens.expires_in,
+        "user": user.to_dict(),
+    }
+
+
+@app.post("/auth/register")
+def register(payload: RegisterRequest, current_user: CurrentUser) -> dict:
+    from app.security.audit import AuditEventType, log_auth_event
+    from app.security.models import get_security_store
+    from app.security.passwords import hash_password
+
+    store = get_security_store()
+
+    # Only admin can assign roles other than viewer
+    if payload.roles and payload.roles != ["viewer"]:
+        # If caller isn't admin, deny
+        effective = store.get_effective_permissions(current_user)
+        if Permission.SYSTEM_ADMIN not in effective:
+            raise HTTPException(status_code=403, detail="Only admins can assign non-viewer roles")
+
+    existing = store.get_user_by_username(payload.username)
+    if existing:
+        raise HTTPException(status_code=409, detail="Username already exists")
+
+    user = store.create_user(
+        username=payload.username,
+        hashed_password=hash_password(payload.password),
+        roles=payload.roles or ["viewer"],
+    )
+    log_auth_event(AuditEventType.USER_CREATED, current_user.user_id, target_id=user.user_id)
+    return user.to_dict()
+
+
+@app.post("/auth/refresh")
+def refresh_token(refresh_token: str) -> dict:
+    from app.security.audit import AuditEventType, log_auth_event
+    from app.security.models import get_security_store
+    from app.security.tokens import create_token_pair, decode_token
+
+    payload = decode_token(refresh_token)
+    if payload.get("type") != "refresh":
+        raise HTTPException(status_code=401, detail="Invalid token type")
+
+    store = get_security_store()
+    user = store.get_user(payload.get("sub", ""))
+    if user is None or not user.is_active:
+        raise HTTPException(status_code=401, detail="User not found or inactive")
+
+    tokens = create_token_pair(user.user_id, user.roles)
+    log_auth_event(AuditEventType.TOKEN_REFRESH, user.user_id)
+    return {
+        "access_token": tokens.access_token,
+        "refresh_token": tokens.refresh_token,
+        "token_type": tokens.token_type,
+        "expires_in": tokens.expires_in,
+    }
+
+
+@app.get("/auth/me")
+def get_me(user: CurrentUser) -> dict:
+    from app.security.models import get_security_store
+    store = get_security_store()
+    return {
+        **user.to_dict(),
+        "permissions": sorted(p.value for p in store.get_effective_permissions(user)),
+    }
+
+
+@app.put("/auth/password")
+def change_password(payload: ChangePasswordRequest, user: CurrentUser) -> dict[str, str]:
+    from app.security.audit import AuditEventType, log_auth_event
+    from app.security.models import get_security_store
+    from app.security.passwords import hash_password, verify_password
+
+    store = get_security_store()
+    if not verify_password(payload.old_password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+
+    store.update_user(user.user_id, hashed_password=hash_password(payload.new_password))
+    log_auth_event(AuditEventType.PASSWORD_CHANGED, user.user_id)
+    return {"status": "password_changed"}
+
+
+@app.get("/auth/users")
+def list_users(user: CurrentUser) -> list[dict]:
+    from app.security.models import get_security_store
+    store = get_security_store()
+    effective = store.get_effective_permissions(user)
+    if Permission.USER_READ not in effective:
+        raise HTTPException(status_code=403, detail="Missing permission: user:read")
+    return [u.to_dict() for u in store.list_users()]
+
+
+@app.post("/auth/roles")
+def create_role(payload: CreateRoleRequest, user: CurrentUser) -> dict:
+    from app.security.audit import AuditEventType, log_auth_event
+    from app.security.models import Permission as Perm
+    from app.security.models import get_security_store
+
+    store = get_security_store()
+    effective = store.get_effective_permissions(user)
+    if Perm.ROLE_WRITE not in effective:
+        raise HTTPException(status_code=403, detail="Missing permission: role:write")
+
+    try:
+        perms = {Perm(p) for p in payload.permissions}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid permission: {exc}") from exc
+
+    role = store.create_role(name=payload.name, permissions=frozenset(perms), description=payload.description)
+    log_auth_event(AuditEventType.ADMIN_ACTION, user.user_id, target_id=role.name, detail={"action": "create_role"})
+    return role.to_dict()
+
+
+@app.get("/auth/roles")
+def list_roles(user: CurrentUser) -> list[dict]:
+    from app.security.models import get_security_store
+    store = get_security_store()
+    return [r.to_dict() for r in store.list_roles()]
+
+
+@app.get("/auth/audit")
+def get_security_audit(user: CurrentUser, limit: int = 100) -> list[dict]:
+    from app.security.audit import AuditEventType, get_audit_log
+    from app.security.models import get_security_store
+
+    store = get_security_store()
+    effective = store.get_effective_permissions(user)
+    if AuditEventType.AUDIT_READ not in {p.value for p in effective} and Permission.AUDIT_READ not in effective:
+        raise HTTPException(status_code=403, detail="Missing permission: audit:read")
+    log = get_audit_log()
+    return [e.to_dict() for e in log.query(limit=limit)]

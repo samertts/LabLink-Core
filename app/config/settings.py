@@ -47,6 +47,14 @@ class AppSettings(BaseSettings):
 
     health_check_interval_seconds: float = 30.0
 
+    jwt_secret_key: str = ""
+    jwt_algorithm: str = "HS256"
+    jwt_access_token_expire_minutes: int = 30
+    jwt_refresh_token_expire_days: int = 7
+
+    default_admin_username: str = "admin"
+    default_admin_password: str = "admin"
+
     @field_validator("data_dir", mode="before")
     @classmethod
     def _ensure_data_dir(cls, v: str | Path) -> Path:
