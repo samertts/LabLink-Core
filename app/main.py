@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import time
 from contextlib import asynccontextmanager
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -913,3 +913,84 @@ def delete_tenant(tenant_id: str, user: CurrentUser) -> dict[str, str]:
     if not deleted:
         raise HTTPException(status_code=404, detail=f"Tenant '{tenant_id}' not found")
     return {"status": "deleted", "tenant_id": tenant_id}
+
+
+# ── AI Integration Layer Endpoints ─────────────────────────────────
+
+
+class LogAnalysisRequest(BaseModel):
+    logs: list[dict[str, Any]] = Field(default_factory=list)
+    provider: str | None = None
+
+
+class AnomalyDetectionRequest(BaseModel):
+    values: list[float] = Field(default_factory=list)
+    provider: str | None = None
+
+
+class FailurePredictionRequest(BaseModel):
+    device_history: dict[str, Any] = Field(default_factory=dict)
+    provider: str | None = None
+
+
+class PatternRecognitionRequest(BaseModel):
+    data_points: list[float] = Field(default_factory=list)
+    provider: str | None = None
+
+
+class RootCauseRequest(BaseModel):
+    symptoms: list[str] = Field(default_factory=list)
+    provider: str | None = None
+
+
+@app.get("/ai/providers")
+def list_ai_providers(_auth: Auth) -> list[dict]:
+    container = _get_container()
+    return container.ai_engine.list_providers()
+
+
+@app.get("/ai/summary")
+def ai_summary(_auth: Auth) -> dict:
+    container = _get_container()
+    return container.ai_engine.summary()
+
+
+@app.get("/ai/history")
+def ai_history(_auth: Auth, limit: int = 50) -> list[dict]:
+    container = _get_container()
+    return container.ai_engine.get_history(limit=limit)
+
+
+@app.post("/ai/analyze/logs")
+def analyze_logs(payload: LogAnalysisRequest, _auth: Auth) -> dict:
+    container = _get_container()
+    response = container.ai_engine.analyze_logs(payload.logs, provider_name=payload.provider)
+    return response.to_dict()
+
+
+@app.post("/ai/analyze/anomalies")
+def detect_anomalies(payload: AnomalyDetectionRequest, _auth: Auth) -> dict:
+    container = _get_container()
+    response = container.ai_engine.detect_anomalies(payload.values, provider_name=payload.provider)
+    return response.to_dict()
+
+
+@app.post("/ai/analyze/failures")
+def predict_failures(payload: FailurePredictionRequest, _auth: Auth) -> dict:
+    container = _get_container()
+    response = container.ai_engine.predict_failure(payload.device_history, provider_name=payload.provider)
+    return response.to_dict()
+
+
+@app.post("/ai/analyze/patterns")
+def recognize_patterns(payload: PatternRecognitionRequest, _auth: Auth) -> dict:
+    container = _get_container()
+    response = container.ai_engine.recognize_patterns(payload.data_points, provider_name=payload.provider)
+    return response.to_dict()
+
+
+@app.post("/ai/analyze/root-cause")
+def root_cause(payload: RootCauseRequest, _auth: Auth) -> dict:
+    container = _get_container()
+    response = container.ai_engine.root_cause_analysis(payload.symptoms, provider_name=payload.provider)
+    return response.to_dict()

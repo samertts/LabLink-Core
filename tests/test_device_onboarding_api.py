@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 
 import app.main as main
+from app.ai.engine import AIEngine
 from app.backup.engine import BackupEngine
 from app.config.settings import AppSettings
 from app.core.alerting import AlertManager
@@ -69,6 +70,7 @@ def _make_container_with_dummy_dm() -> ServiceContainer:
         worker=BackgroundWorker(),
         plugin_manager=PluginManager(event_bus=EventBus()),
         backup_engine=BackupEngine(db_path=":memory:"),
+        ai_engine=AIEngine(),
     )
 
 

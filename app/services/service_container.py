@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from app.ai.engine import AIEngine
 from app.backup.engine import BackupEngine
 from app.config.settings import AppSettings, get_settings
 from app.core.alerting import AlertManager
@@ -50,6 +51,7 @@ class ServiceContainer:
     worker: BackgroundWorker
     plugin_manager: PluginManager
     backup_engine: BackupEngine
+    ai_engine: AIEngine
 
 
 def create_service_container(settings: AppSettings | None = None) -> ServiceContainer:
@@ -109,6 +111,7 @@ def create_service_container(settings: AppSettings | None = None) -> ServiceCont
     )
 
     backup_engine = BackupEngine(db_path=settings.effective_db_path)
+    ai_engine = AIEngine()
 
     return ServiceContainer(
         settings=settings,
@@ -128,4 +131,5 @@ def create_service_container(settings: AppSettings | None = None) -> ServiceCont
         worker=worker,
         plugin_manager=plugin_manager,
         backup_engine=backup_engine,
+        ai_engine=ai_engine,
     )
