@@ -126,6 +126,7 @@ class User:
     username: str
     hashed_password: str
     roles: list[str] = field(default_factory=lambda: ["viewer"])
+    tenant_id: str = "default"
     is_active: bool = True
     created_at: float = field(default_factory=time.time)
     last_login: float | None = None
@@ -137,6 +138,7 @@ class User:
             "user_id": self.user_id,
             "username": self.username,
             "roles": self.roles,
+            "tenant_id": self.tenant_id,
             "is_active": self.is_active,
             "created_at": self.created_at,
             "last_login": self.last_login,
@@ -228,13 +230,14 @@ class SecurityStore:
         with self._lock:
             return list(self._users.values())
 
-    def create_user(self, username: str, hashed_password: str, roles: list[str] | None = None) -> User:
+    def create_user(self, username: str, hashed_password: str, roles: list[str] | None = None, tenant_id: str = "default") -> User:
         user_id = f"usr_{secrets.token_hex(8)}"
         user = User(
             user_id=user_id,
             username=username,
             hashed_password=hashed_password,
             roles=roles or ["viewer"],
+            tenant_id=tenant_id,
         )
         with self._lock:
             self._users[user_id] = user

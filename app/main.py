@@ -810,3 +810,106 @@ def enforce_retention(_auth: Auth) -> dict:
     container = _get_container()
     deleted = container.backup_engine.enforce_retention()
     return {"deleted": deleted, "count": len(deleted)}
+
+
+# ── Multi-Tenancy Endpoints ───────────────────────────────────────
+
+
+class TenantCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=128)
+    slug: str = Field(min_length=1, max_length=64, pattern=r"^[a-z0-9\-]+$")
+    max_devices: int = Field(default=50, ge=1, le=10000)
+    max_users: int = Field(default=20, ge=1, le=1000)
+    tags: list[str] = Field(default_factory=list)
+
+
+class TenantUpdateRequest(BaseModel):
+    name: str | None = None
+    is_active: bool | None = None
+    max_devices: int | None = None
+    max_users: int | None = None
+    settings: dict[str, str] | None = None
+    tags: list[str] | None = None
+
+
+@app.get("/tenants")
+def list_tenants(_auth: Auth) -> list[dict]:
+    from app.tenancy.store import get_tenant_store
+    return [t.to_dict() for t in get_tenant_store().list_all()]
+
+
+@app.get("/tenants/summary")
+def tenant_summary(_auth: Auth) -> dict:
+    from app.tenancy.store import get_tenant_store
+    store = get_tenant_store()
+    return {"total": store.count(), "active": store.count(active_only=True)}
+
+
+@app.get("/tenants/{tenant_id}")
+def get_tenant(tenant_id: str, _auth: Auth) -> dict:
+    from app.tenancy.store import get_tenant_store
+    tenant = get_tenant_store().get(tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=404, detail=f"Tenant '{tenant_id}' not found")
+    return tenant.to_dict()
+
+
+@app.post("/tenants")
+def create_tenant(payload: TenantCreateRequest, user: CurrentUser) -> dict:
+    from app.tenancy.store import get_tenant_store
+    store = get_tenant_store()
+    # Only admins can create tenants
+    from app.security.models import get_security_store
+    sec_store = get_security_store()
+    perms = sec_store.get_effective_permissions(user)
+    if Permission.SYSTEM_ADMIN not in perms:
+        raise HTTPException(status_code=403, detail="Only admins can create tenants")
+
+    existing = store.get_by_slug(payload.slug)
+    if existing:
+        raise HTTPException(status_code=409, detail="Tenant slug already exists")
+
+    tenant = store.create(
+        name=payload.name,
+        slug=payload.slug,
+        max_devices=payload.max_devices,
+        max_users=payload.max_users,
+        tags=payload.tags,
+    )
+    return tenant.to_dict()
+
+
+@app.put("/tenants/{tenant_id}")
+def update_tenant(tenant_id: str, payload: TenantUpdateRequest, user: CurrentUser) -> dict:
+    from app.tenancy.store import get_tenant_store
+    store = get_tenant_store()
+    from app.security.models import get_security_store
+    sec_store = get_security_store()
+    perms = sec_store.get_effective_permissions(user)
+    if Permission.SYSTEM_ADMIN not in perms:
+        raise HTTPException(status_code=403, detail="Only admins can update tenants")
+
+    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    tenant = store.update(tenant_id, **updates)
+    if tenant is None:
+        raise HTTPException(status_code=404, detail=f"Tenant '{tenant_id}' not found")
+    return tenant.to_dict()
+
+
+@app.delete("/tenants/{tenant_id}")
+def delete_tenant(tenant_id: str, user: CurrentUser) -> dict[str, str]:
+    from app.tenancy.store import get_tenant_store
+    store = get_tenant_store()
+    from app.security.models import get_security_store
+    sec_store = get_security_store()
+    perms = sec_store.get_effective_permissions(user)
+    if Permission.SYSTEM_ADMIN not in perms:
+        raise HTTPException(status_code=403, detail="Only admins can delete tenants")
+
+    if tenant_id == "default":
+        raise HTTPException(status_code=400, detail="Cannot delete default tenant")
+
+    deleted = store.delete(tenant_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Tenant '{tenant_id}' not found")
+    return {"status": "deleted", "tenant_id": tenant_id}
