@@ -1,5 +1,5 @@
 #define MyAppName "LabLink Core"
-#define MyAppVersion "1.0.0"
+#define MyAppVersion "1.1.0"
 #define MyAppPublisher "LabLink"
 #define MyAppExeName "Application.exe"
 
@@ -16,6 +16,8 @@ OutputBaseFilename=ApplicationSetup
 Compression=lzma
 SolidCompression=yes
 WizardStyle=modern
+PrivilegesRequired=admin
+PrivilegesRequiredOverridesAllowed=dialog
 
 [Files]
 Source: "dist\Application.exe"; DestDir: "{app}"; Flags: ignoreversion

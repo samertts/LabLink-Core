@@ -127,6 +127,7 @@ class TCPConnector(BaseConnector):
         self.port = port
         self.reconnect_delay_seconds = reconnect_delay_seconds
         self._socket: socket.socket | None = None
+        self._socket_lock = threading.Lock()
         self._reader_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
 
@@ -137,11 +138,19 @@ class TCPConnector(BaseConnector):
         self._reader_thread = threading.Thread(target=self._run_forever, daemon=True)
         self._reader_thread.start()
 
+    def _set_socket(self, sock: socket.socket | None) -> None:
+        with self._socket_lock:
+            self._socket = sock
+
+    def _get_socket(self) -> socket.socket | None:
+        with self._socket_lock:
+            return self._socket
+
     def _run_forever(self) -> None:
         while not self._stop_event.is_set():
             try:
                 with socket.create_connection((self.host, self.port), timeout=5) as conn:
-                    self._socket = conn
+                    self._set_socket(conn)
                     self.is_connected = True
                     logger.info(
                         "TCP connected",
@@ -163,6 +172,7 @@ class TCPConnector(BaseConnector):
                         conn.sendall(bytes([ACK]))
             except Exception as exc:
                 self.is_connected = False
+                self._set_socket(None)
                 logger.warning(
                     "TCP connection dropped; retrying",
                     extra={
@@ -175,14 +185,14 @@ class TCPConnector(BaseConnector):
                 time.sleep(self.reconnect_delay_seconds)
 
     def send_command(self, payload: bytes) -> None:
-        if self._socket is None:
+        sock = self._get_socket()
+        if sock is None:
             raise RuntimeError("TCP socket is not connected")
-        self._socket.sendall(payload)
+        sock.sendall(payload)
 
     def disconnect(self) -> None:
         self._stop_event.set()
-        if self._socket is not None:
-            self._socket.close()
+        self._set_socket(None)
         if self._reader_thread is not None:
             self._reader_thread.join(timeout=2)
         self.is_connected = False

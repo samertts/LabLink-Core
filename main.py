@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import traceback
 
-from app.logging.setup import configure_logging
+from app.log_config.setup import configure_logging
 from app.validation.startup import validate_runtime
 
 

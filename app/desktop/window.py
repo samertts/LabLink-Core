@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import socket
 import threading
 
 import uvicorn
 
 from app.compatibility.validator import validate_platform
-from app.logging.setup import configure_logging
+from app.log_config.setup import configure_logging
 from app.main import app
 from app.recovery.manager import ensure_runtime_files
 from app.validation.startup import validate_runtime
@@ -17,6 +18,15 @@ def _qt_imports():
     from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QTextEdit, QVBoxLayout, QWidget
 
     return Qt, QApplication, QLabel, QPushButton, QTextEdit, QVBoxLayout, QWidget
+
+
+def _is_port_available(host: str, port: int) -> bool:
+    """Check if a port is available for binding."""
+    try:
+        with socket.create_connection((host, port), timeout=0.5):
+            return False
+    except (ConnectionRefusedError, OSError):
+        return True
 
 
 def run_desktop() -> int:
@@ -72,10 +82,16 @@ def run_desktop() -> int:
                 self._log("API service already running")
                 return
 
+            host, port = "127.0.0.1", 8000
+            if not _is_port_available(host, port):
+                self._log(f"Port {port} is already in use. Please stop the other process or use a different port.")
+                self.status.setText("Port Conflict")
+                return
+
             self._server_thread = threading.Thread(target=self._serve, daemon=True)
             self._server_thread.start()
-            self.status.setText("API Service Running on http://127.0.0.1:8000")
-            self._log("Started API service")
+            self.status.setText(f"API Service Running on http://{host}:{port}")
+            self._log(f"Started API service on {host}:{port}")
 
         def _serve(self) -> None:
             uvicorn.run(app, host="127.0.0.1", port=8000, log_level="info")

@@ -43,6 +43,7 @@ Phase-1..7 baseline now includes ASTM pipeline, device emulator, registry, adapt
   - `dry_run` mode to validate onboarding plan before live registration in healthcare environments
 
 - **API endpoints**
+  - `GET /health`
   - `POST /devices/register`
   - `GET /devices`
   - `GET /registry`

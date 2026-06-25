@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import logging
+import os
+import threading
 import uuid
 from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from app.core.alerting import AlertManager
@@ -13,28 +16,75 @@ from app.core.device_onboarding import DeviceFingerprint, DeviceOnboardingDirect
 from app.core.modes import CommunicationMode
 from app.edge.sync_engine import SyncEngine
 from app.integration.gula_client import GulaClient
+from app.middleware.rate_limit import RateLimitMiddleware
 from app.pipeline.data_pipeline import DataPipeline
 from app.pipeline.normalizer import NormalizedResult, Normalizer
 from app.pipeline.parser_engine import ASTMParser
 from app.security.auth import verify_api_key
 from app.storage.db import InMemoryDB
-from app.storage.result_repository import ResultRepository
+from app.storage.result_repository import LogRepository, ResultRepository
+from app.settings.paths import DATA_DIR
 
 logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("lablink.api")
 
-app = FastAPI(title="LabLink Core", version="0.6.0")
+app = FastAPI(title="LabLink Core", version="1.1.0")
 
-repository = ResultRepository(InMemoryDB())
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://127.0.0.1:8000", "http://localhost:8000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.add_middleware(RateLimitMiddleware, max_requests=200, window_seconds=60)
+
+_db = InMemoryDB(db_path=str(DATA_DIR / "lablink.db"))
+repository = ResultRepository(_db)
+_log_repo = LogRepository(_db)
 device_manager = DeviceManager()
 alerts = AlertManager()
 sync_engine = SyncEngine()
-mode = CommunicationMode.HYBRID
 onboarding_director = DeviceOnboardingDirector()
+
+
+@app.on_event("shutdown")
+async def shutdown_event() -> None:
+    """Graceful shutdown: close DB, GULA client, and disconnect all devices."""
+    logger.info("Shutting down LabLink Core...")
+    device_manager.shutdown()
+    await pipeline.gula_client.close()
+    _db.close()
+    logger.info("Shutdown complete.")
+
+
+class _ThreadSafeMode:
+    """Thread-safe holder for the global communication mode."""
+
+    def __init__(self, initial: CommunicationMode = CommunicationMode.HYBRID) -> None:
+        self._mode: CommunicationMode = initial
+        self._lock = threading.Lock()
+
+    def get(self) -> CommunicationMode:
+        with self._lock:
+            return self._mode
+
+    def set(self, mode: CommunicationMode) -> None:
+        with self._lock:
+            self._mode = mode
+
+
+_mode = _ThreadSafeMode()
+
+gula_url = os.getenv("LABLINK_GULA_URL", "http://gula.local")
+gula_lab_id = os.getenv("LABLINK_GULA_LAB_ID", "LAB001")
 
 pipeline = DataPipeline(
     parser=ASTMParser(),
     normalizer=Normalizer(),
-    gula_client=GulaClient(base_url="http://gula.local", lab_id="LAB001"),
+    gula_client=GulaClient(base_url=gula_url, lab_id=gula_lab_id),
+    result_repo=repository,
+    log_repo=_log_repo,
 )
 
 Auth = Annotated[str, Depends(verify_api_key)]
@@ -67,7 +117,7 @@ class RegisterDeviceRequest(BaseModel):
 
 
 class CommandRequest(BaseModel):
-    command: str = Field(min_length=1)
+    command: str = Field(min_length=1, max_length=256, pattern=r"^[A-Za-z0-9_\-\. \|]+$")
 
 
 class RoutingPolicyRequest(BaseModel):
@@ -129,8 +179,14 @@ class OnboardingExecuteResponse(BaseModel):
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def health() -> dict[str, str | dict[str, str]]:
+    checks: dict[str, str] = {}
+    try:
+        _db.integrity_check()
+        checks["database"] = "ok"
+    except Exception:
+        checks["database"] = "error"
+    return {"status": "ok", "version": "1.1.0", "checks": checks}
 
 
 @app.post("/devices/register")
@@ -138,8 +194,12 @@ def register_device(payload: RegisterDeviceRequest, _auth: Auth) -> dict[str, st
     config = payload.model_dump(exclude_none=True)
     try:
         device_manager.add_device(config)
+    except ValueError as exc:
+        logger.warning("Device registration failed", extra={"device_id": payload.device_id, "error": str(exc)})
+        raise HTTPException(status_code=400, detail="Invalid device configuration") from exc
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        logger.exception("Unexpected error registering device", extra={"device_id": payload.device_id})
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
     return {"status": "registered", "device_id": payload.device_id}
 
 
@@ -267,8 +327,12 @@ def execute_device_onboarding(payload: OnboardingExecuteRequest, _auth: Auth) ->
 
     try:
         device_manager.add_device(config)
+    except ValueError as exc:
+        logger.warning("Device onboarding failed", extra={"device_id": payload.device_id, "error": str(exc)})
+        raise HTTPException(status_code=400, detail="Invalid device configuration") from exc
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        logger.exception("Unexpected error during onboarding", extra={"device_id": payload.device_id})
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
 
     return OnboardingExecuteResponse(status="registered", device_id=payload.device_id, scan=scan)
 
@@ -276,9 +340,12 @@ def execute_device_onboarding(payload: OnboardingExecuteRequest, _auth: Auth) ->
 def send_device_command(device_id: str, payload: CommandRequest, _auth: Auth) -> dict[str, str]:
     try:
         device_manager.send_command(device_id, payload.command)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Device not found") from None
     except Exception as exc:
-        alerts.emit(severity="error", message=str(exc), device_id=device_id)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        logger.warning("Command failed", extra={"device_id": device_id, "error": str(exc)})
+        alerts.emit(severity="error", message=f"Command failed for {device_id}", device_id=device_id)
+        raise HTTPException(status_code=400, detail="Failed to send command") from exc
     return {"status": "sent", "device_id": device_id}
 
 
@@ -290,23 +357,23 @@ def set_device_routing(device_id: str, payload: RoutingPolicyRequest, _auth: Aut
 
 @app.post("/mode")
 def set_mode(payload: ModeRequest, _auth: Auth) -> dict[str, str]:
-    global mode
-    mode = payload.mode
-    return {"status": "updated", "mode": mode}
+    _mode.set(payload.mode)
+    return {"status": "updated", "mode": _mode.get()}
 
 
 @app.get("/mode")
 def get_mode(_auth: Auth) -> dict[str, str]:
-    return {"mode": mode}
+    return {"mode": _mode.get()}
 
 
 @app.post("/ingest", response_model=IngestResponse)
 async def ingest(payload: IngestRequest, _auth: Auth) -> IngestResponse:
     repository.save_log(device_id=payload.device_id, raw_data=payload.chunk, status="received")
 
-    if mode == CommunicationMode.LOCAL_ONLY:
+    current_mode = _mode.get()
+    if current_mode == CommunicationMode.LOCAL_ONLY:
         pipeline.router.set_policy(payload.device_id, "offline")
-    elif mode == CommunicationMode.CLOUD_ONLY:
+    elif current_mode == CommunicationMode.CLOUD_ONLY:
         pipeline.router.set_policy(payload.device_id, "gula")
 
     results = await pipeline.process_chunk(
@@ -318,7 +385,10 @@ async def ingest(payload: IngestRequest, _auth: Auth) -> IngestResponse:
     )
 
     if pipeline.retry_queue.size() > 0:
-        for item in pipeline.retry_queue.list_all():
+        while pipeline.retry_queue.size() > 0:
+            item = pipeline.retry_queue.dequeue()
+            if item is None:
+                break
             repository.enqueue_offline(item)
             sync_engine.stage(
                 item_id=str(uuid.uuid4()),
@@ -326,14 +396,6 @@ async def ingest(payload: IngestRequest, _auth: Auth) -> IngestResponse:
                 payload=item,
                 version=1,
             )
-
-    for _ in results:
-        repository.save_log(
-            device_id=payload.device_id,
-            raw_data=payload.chunk,
-            status="parsed",
-            error_message="",
-        )
 
     repository.save_results(results)
     return IngestResponse(status="ok", processed=len(results), results=results)
@@ -349,25 +411,30 @@ async def sync_edge_buffer(_auth: Auth) -> dict[str, int]:
 
 
 @app.get("/alerts")
-def list_alerts(_auth: Auth) -> list[dict[str, str]]:
-    return alerts.list_alerts()
+def list_alerts(_auth: Auth, limit: int = 100, offset: int = 0) -> list[dict[str, str]]:
+    all_alerts = alerts.list_alerts()
+    return all_alerts[offset: offset + limit]
 
 
 @app.get("/results")
-def list_results(_auth: Auth) -> list[dict]:
-    return repository.list_results()
+def list_results(_auth: Auth, limit: int = 100, offset: int = 0) -> list[dict]:
+    all_results = repository.list_results()
+    return all_results[offset: offset + limit]
 
 
 @app.get("/logs")
-def list_logs(_auth: Auth) -> list[dict]:
-    return repository.list_logs()
+def list_logs(_auth: Auth, limit: int = 100, offset: int = 0) -> list[dict]:
+    all_logs = repository.list_logs()
+    return all_logs[offset: offset + limit]
 
 
 @app.get("/audit")
-def list_audit(_auth: Auth) -> list[dict]:
-    return repository.list_audit_trail()
+def list_audit(_auth: Auth, limit: int = 100, offset: int = 0) -> list[dict]:
+    all_audit = repository.list_audit_trail()
+    return all_audit[offset: offset + limit]
 
 
 @app.get("/offline-queue")
-def list_offline_queue(_auth: Auth) -> list[dict]:
-    return repository.list_offline_queue()
+def list_offline_queue(_auth: Auth, limit: int = 100, offset: int = 0) -> list[dict]:
+    all_queue = repository.list_offline_queue()
+    return all_queue[offset: offset + limit]

@@ -152,8 +152,12 @@ class ASTMMessageBuilder:
             elif record.type == "terminator":
                 self.current_patient_id = None
                 self.current_patient_name = None
-
         return results
+
+    def reset(self) -> None:
+        """Reset patient context state for a new message frame."""
+        self.current_patient_id = None
+        self.current_patient_name = None
 
 
 class ParserEngine:

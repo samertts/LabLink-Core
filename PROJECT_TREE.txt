@@ -1,0 +1,87 @@
+.
+├── .github
+│   └── workflows
+│       └── build.yml
+├── .gitignore
+├── .gitkeep
+├── CHANGELOG.md
+├── Makefile
+├── PROJECT_TREE.txt
+├── README.md
+├── VERSION
+├── app
+│   ├── adapters
+│   │   ├── base.py
+│   │   ├── registry.py
+│   │   └── vendors.py
+│   ├── app.py
+│   ├── compatibility
+│   │   └── validator.py
+│   ├── connectors
+│   │   └── base.py
+│   ├── core
+│   │   ├── alerting.py
+│   │   ├── connection_pool.py
+│   │   ├── device_manager.py
+│   │   ├── device_onboarding.py
+│   │   ├── device_registry.py
+│   │   ├── modes.py
+│   │   └── retry_queue.py
+│   ├── desktop
+│   │   └── window.py
+│   ├── edge
+│   │   ├── agent.py
+│   │   └── sync_engine.py
+│   ├── emulator
+│   │   └── tcp_device_emulator.py
+│   ├── integration
+│   │   └── gula_client.py
+│   ├── logging
+│   │   └── setup.py
+│   ├── main.py
+│   ├── normalization
+│   │   └── schema.py
+│   ├── parsers
+│   │   └── astm_basic.py
+│   ├── pipeline
+│   │   ├── data_pipeline.py
+│   │   ├── normalizer.py
+│   │   ├── parser_engine.py
+│   │   ├── patient_matching.py
+│   │   ├── smart_router.py
+│   │   └── test_mapping.py
+│   ├── recovery
+│   │   ├── diagnostics.py
+│   │   └── manager.py
+│   ├── security
+│   │   └── auth.py
+│   ├── settings
+│   │   └── paths.py
+│   ├── storage
+│   │   ├── db.py
+│   │   └── result_repository.py
+│   └── validation
+│       └── startup.py
+├── docs
+│   └── PROJECT_DIRECTOR_PLAN.md
+├── installer
+│   └── setup.iss
+├── main.py
+├── pyproject.toml
+├── requirements.txt
+└── tests
+    ├── test_adapters.py
+    ├── test_desktop_productionization.py
+    ├── test_device_manager.py
+    ├── test_device_onboarding.py
+    ├── test_device_onboarding_api.py
+    ├── test_emulator.py
+    ├── test_normalization.py
+    ├── test_parser.py
+    ├── test_pipeline_astm.py
+    ├── test_pipeline_phase1.py
+    ├── test_routing_and_matching.py
+    ├── test_sync_and_auth.py
+    └── test_sync_engine.py
+
+23 directories, 61 files

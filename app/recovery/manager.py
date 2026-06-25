@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import sqlite3
 from dataclasses import dataclass
 
 from app.settings.paths import REQUIRED_DIRS, RUNTIME_CONFIG, RUNTIME_DB
@@ -14,6 +13,9 @@ class RepairReport:
 
 
 def ensure_runtime_files() -> RepairReport:
+    from app.storage.db import InMemoryDB
+    from app.settings.paths import DATA_DIR
+
     repaired: list[str] = []
     warnings: list[str] = []
 
@@ -26,20 +28,13 @@ def ensure_runtime_files() -> RepairReport:
         RUNTIME_CONFIG.write_text(json.dumps({"api_host": "127.0.0.1", "api_port": 8000}, indent=2), encoding="utf-8")
         repaired.append(f"created_file:{RUNTIME_CONFIG}")
 
+    db_path = str(DATA_DIR / "lablink.db")
+    db = InMemoryDB(db_path=db_path)
     if not RUNTIME_DB.exists():
-        conn = sqlite3.connect(RUNTIME_DB)
-        conn.execute("CREATE TABLE IF NOT EXISTS startup_checks (id INTEGER PRIMARY KEY, checked_at TEXT NOT NULL)")
-        conn.commit()
-        conn.close()
         repaired.append(f"created_file:{RUNTIME_DB}")
 
-    try:
-        conn = sqlite3.connect(RUNTIME_DB)
-        result = conn.execute("PRAGMA integrity_check").fetchone()
-        conn.close()
-        if not result or result[0] != "ok":
-            warnings.append(f"database_integrity_warning:{result}")
-    except sqlite3.DatabaseError as exc:
-        warnings.append(f"database_integrity_warning:{exc}")
+    if not db.integrity_check():
+        warnings.append("database_integrity_warning:integrity check failed")
 
+    db.close()
     return RepairReport(repaired=repaired, warnings=warnings)

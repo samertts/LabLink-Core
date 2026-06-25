@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 from app.adapters.registry import AdapterRegistry
 from app.core.retry_queue import RetryQueue
@@ -93,9 +92,17 @@ class DataPipeline:
                         fallback_patient_id=resolved_patient_id,
                         barcode=barcode,
                     )
+                    try:
+                        numeric_value = float(row["value"])
+                    except (ValueError, TypeError):
+                        logger.warning(
+                            "Skipping non-numeric test value",
+                            extra={"device_id": device_id, "test_code": row["test_code"], "value": row["value"]},
+                        )
+                        continue
                     parsed = ParsedResult(
                         test_code=canonical,
-                        value=float(row["value"]),
+                        value=numeric_value,
                         unit=row["unit"],
                     )
                     normalized = self.normalizer.transform(

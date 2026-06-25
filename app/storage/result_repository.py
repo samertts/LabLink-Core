@@ -17,7 +17,7 @@ class ResultRepository:
     def save_results(self, results: list[NormalizedResult]) -> None:
         for result in results:
             row = asdict(result)
-            self.db.results.append(row)
+            self.db.insert("results", row)
             self._legacy_items.append(result)
             self.add_audit_event(
                 event_type="result_saved",
@@ -29,7 +29,7 @@ class ResultRepository:
             )
 
     def list_results(self) -> list[dict]:
-        return list(self.db.results)
+        return self.db.select_all("results")
 
     # Backward-compatible alias used by early phase tests.
     def list(self) -> list[Any]:
@@ -42,37 +42,39 @@ class ResultRepository:
         self.save_results([result])
 
     def save_log(self, *, device_id: str, raw_data: str, status: str, error_message: str = "") -> None:
-        self.db.logs.append(
+        self.db.insert(
+            "logs",
             {
                 "device_id": device_id,
                 "raw_data": raw_data,
                 "status": status,
                 "error_message": error_message,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
+            },
         )
 
     def list_logs(self) -> list[dict]:
-        return list(self.db.logs)
+        return self.db.select_all("logs")
 
     def enqueue_offline(self, payload: dict[str, Any]) -> None:
-        self.db.offline_queue.append(payload)
+        self.db.insert("offline_queue", payload)
         self.add_audit_event(event_type="offline_enqueued", payload=payload)
 
     def list_offline_queue(self) -> list[dict]:
-        return list(self.db.offline_queue)
+        return self.db.select_all("offline_queue")
 
     def add_audit_event(self, *, event_type: str, payload: dict[str, Any]) -> None:
-        self.db.audit_trail.append(
+        self.db.insert(
+            "audit_trail",
             {
                 "event_type": event_type,
                 "payload": payload,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
+            },
         )
 
     def list_audit_trail(self) -> list[dict]:
-        return list(self.db.audit_trail)
+        return self.db.select_all("audit_trail")
 
 
 class LogRepository:
@@ -89,7 +91,7 @@ class LogRepository:
             "error_message": entry.get("error_message", ""),
             "timestamp": entry.get("timestamp", datetime.now(timezone.utc).isoformat()),
         }
-        self.db.logs.append(payload)
+        self.db.insert("logs", payload)
 
     def list(self) -> list[dict]:
-        return list(self.db.logs)
+        return self.db.select_all("logs")
