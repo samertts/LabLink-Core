@@ -1,34 +1,22 @@
 from __future__ import annotations
 
 import logging
-import os
-import threading
-import uuid
 from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from app.core.alerting import AlertManager
-from app.core.device_manager import DeviceManager
-from app.core.device_onboarding import DeviceFingerprint, DeviceOnboardingDirector
 from app.core.modes import CommunicationMode
-from app.edge.sync_engine import SyncEngine
-from app.integration.gula_client import GulaClient
 from app.middleware.rate_limit import RateLimitMiddleware
-from app.pipeline.data_pipeline import DataPipeline
-from app.pipeline.normalizer import NormalizedResult, Normalizer
-from app.pipeline.parser_engine import ASTMParser
+from app.pipeline.normalizer import NormalizedResult
 from app.security.auth import verify_api_key
-from app.storage.db import InMemoryDB
-from app.storage.result_repository import LogRepository, ResultRepository
-from app.settings.paths import DATA_DIR
+from app.services.service_container import ServiceContainer, create_service_container
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("lablink.api")
 
-app = FastAPI(title="LabLink Core", version="1.1.0")
+app = FastAPI(title="LabLink Core", version="1.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -39,53 +27,32 @@ app.add_middleware(
 )
 app.add_middleware(RateLimitMiddleware, max_requests=200, window_seconds=60)
 
-_db = InMemoryDB(db_path=str(DATA_DIR / "lablink.db"))
-repository = ResultRepository(_db)
-_log_repo = LogRepository(_db)
-device_manager = DeviceManager()
-alerts = AlertManager()
-sync_engine = SyncEngine()
-onboarding_director = DeviceOnboardingDirector()
+_container: ServiceContainer | None = None
+
+
+def _get_container() -> ServiceContainer:
+    global _container
+    if _container is None:
+        _container = create_service_container()
+    return _container
+
+
+@app.on_event("startup")
+async def startup_event() -> None:
+    global _container
+    _container = create_service_container()
+    logger.info("LabLink Core started (v1.2.0)")
 
 
 @app.on_event("shutdown")
 async def shutdown_event() -> None:
-    """Graceful shutdown: close DB, GULA client, and disconnect all devices."""
+    container = _get_container()
     logger.info("Shutting down LabLink Core...")
-    device_manager.shutdown()
-    await pipeline.gula_client.close()
-    _db.close()
+    container.device_service.shutdown()
+    await container.pipeline.gula_client.close()
+    container.db.close()
     logger.info("Shutdown complete.")
 
-
-class _ThreadSafeMode:
-    """Thread-safe holder for the global communication mode."""
-
-    def __init__(self, initial: CommunicationMode = CommunicationMode.HYBRID) -> None:
-        self._mode: CommunicationMode = initial
-        self._lock = threading.Lock()
-
-    def get(self) -> CommunicationMode:
-        with self._lock:
-            return self._mode
-
-    def set(self, mode: CommunicationMode) -> None:
-        with self._lock:
-            self._mode = mode
-
-
-_mode = _ThreadSafeMode()
-
-gula_url = os.getenv("LABLINK_GULA_URL", "http://gula.local")
-gula_lab_id = os.getenv("LABLINK_GULA_LAB_ID", "LAB001")
-
-pipeline = DataPipeline(
-    parser=ASTMParser(),
-    normalizer=Normalizer(),
-    gula_client=GulaClient(base_url=gula_url, lab_id=gula_lab_id),
-    result_repo=repository,
-    log_repo=_log_repo,
-)
 
 Auth = Annotated[str, Depends(verify_api_key)]
 
@@ -126,7 +93,6 @@ class RoutingPolicyRequest(BaseModel):
 
 class ModeRequest(BaseModel):
     mode: CommunicationMode
-
 
 
 class DeviceScanRequest(BaseModel):
@@ -180,42 +146,42 @@ class OnboardingExecuteResponse(BaseModel):
 
 @app.get("/health")
 def health() -> dict[str, str | dict[str, str]]:
-    checks: dict[str, str] = {}
-    try:
-        _db.integrity_check()
-        checks["database"] = "ok"
-    except Exception:
-        checks["database"] = "error"
-    return {"status": "ok", "version": "1.1.0", "checks": checks}
+    container = _get_container()
+    result = container.health_service.check()
+    return {"status": result.status, "version": result.version, "checks": result.checks}
 
 
 @app.post("/devices/register")
 def register_device(payload: RegisterDeviceRequest, _auth: Auth) -> dict[str, str]:
-    config = payload.model_dump(exclude_none=True)
+    container = _get_container()
     try:
-        device_manager.add_device(config)
+        return container.device_service.register_device(payload.model_dump(exclude_none=True))
     except ValueError as exc:
-        logger.warning("Device registration failed", extra={"device_id": payload.device_id, "error": str(exc)})
+        logger.warning(
+            "Device registration failed",
+            extra={"device_id": payload.device_id, "error": str(exc)},
+        )
         raise HTTPException(status_code=400, detail="Invalid device configuration") from exc
     except Exception as exc:
-        logger.exception("Unexpected error registering device", extra={"device_id": payload.device_id})
+        logger.exception(
+            "Unexpected error registering device",
+            extra={"device_id": payload.device_id},
+        )
         raise HTTPException(status_code=500, detail="Internal server error") from exc
-    return {"status": "registered", "device_id": payload.device_id}
 
 
 @app.get("/devices")
 def list_devices(_auth: Auth) -> list[dict]:
+    container = _get_container()
     return [
-        {
-            "device_id": d.device_id,
-            "is_connected": d.is_connected,
-        }
-        for d in device_manager.list_devices()
+        {"device_id": d.device_id, "is_connected": d.is_connected}
+        for d in container.device_service.list_devices()
     ]
 
 
 @app.get("/registry")
 def list_registry(_auth: Auth) -> list[dict]:
+    container = _get_container()
     return [
         {
             "device_id": item.device_id,
@@ -224,97 +190,89 @@ def list_registry(_auth: Auth) -> list[dict]:
             "protocol": item.protocol,
             "connection": item.connection,
         }
-        for item in device_manager.list_registry()
+        for item in container.device_service.list_registry()
     ]
-
-
 
 
 @app.post("/devices/onboarding/scan", response_model=DeviceScanResponse)
 def scan_device_onboarding(payload: DeviceScanRequest, _auth: Auth) -> DeviceScanResponse:
-    return _build_scan_response(payload)
-
-
-def _build_scan_response(payload: DeviceScanRequest) -> DeviceScanResponse:
-    identity = onboarding_director.identify_device(
-        DeviceFingerprint(
-            vendor_id=payload.vendor_id,
-            product_id=payload.product_id,
-            manufacturer=payload.manufacturer,
-            model=payload.model,
-            device_class=payload.device_class,
-            protocol_hint=payload.protocol_hint,
-        )
-    )
-    drivers = onboarding_director.driver_candidates(payload.os_name, identity["protocol"])
-    plan = onboarding_director.install_plan(payload.os_name, identity["protocol"])
-    transport = onboarding_director.recommend_transport(
+    container = _get_container()
+    scan = container.device_service.scan_device(
+        os_name=payload.os_name,
         supports_wireless=payload.supports_wireless,
         required_mbps=payload.required_mbps,
         max_latency_ms=payload.max_latency_ms,
         distance_meters=payload.distance_meters,
-    )
-    connectivity_profile = onboarding_director.connectivity_profile(
         deployment_target=payload.deployment_target,
         region=payload.region,
-        max_latency_ms=payload.max_latency_ms,
-    )
-    quick_link = onboarding_director.quick_link_profile(
-        os_name=payload.os_name,
-        protocol=str(identity["protocol"]),
-        supports_wireless=payload.supports_wireless,
+        protocol_hint=payload.protocol_hint,
+        vendor_id=payload.vendor_id,
+        product_id=payload.product_id,
+        manufacturer=payload.manufacturer,
+        model=payload.model,
+        device_class=payload.device_class,
         is_non_oem=payload.is_non_oem,
     )
-
     return DeviceScanResponse(
-        identity=str(identity["identity"]),
-        protocol=str(identity["protocol"]),
-        device_class=str(identity["device_class"]),
-        confidence=float(identity["confidence"]),
-        driver_candidates=drivers,
-        install_plan=plan,
-        transport=transport,
-        connectivity_profile=connectivity_profile,
-        quick_link=quick_link,
+        identity=scan.identity,
+        protocol=scan.protocol,
+        device_class=scan.device_class,
+        confidence=scan.confidence,
+        driver_candidates=scan.driver_candidates,
+        install_plan=scan.install_plan,
+        transport=scan.transport,
+        connectivity_profile=scan.connectivity_profile,
+        quick_link=scan.quick_link,
     )
 
 
 @app.post("/devices/onboarding/execute", response_model=OnboardingExecuteResponse)
-def execute_device_onboarding(payload: OnboardingExecuteRequest, _auth: Auth) -> OnboardingExecuteResponse:
-    scan = _build_scan_response(payload)
-    if scan.confidence < payload.min_confidence:
-        raise HTTPException(
-            status_code=400,
-            detail=f"device confidence {scan.confidence:.2f} is below required threshold {payload.min_confidence:.2f}",
+def execute_device_onboarding(
+    payload: OnboardingExecuteRequest, _auth: Auth
+) -> OnboardingExecuteResponse:
+    container = _get_container()
+    scan = container.device_service.scan_device(
+        os_name=payload.os_name,
+        supports_wireless=payload.supports_wireless,
+        required_mbps=payload.required_mbps,
+        max_latency_ms=payload.max_latency_ms,
+        distance_meters=payload.distance_meters,
+        deployment_target=payload.deployment_target,
+        region=payload.region,
+        protocol_hint=payload.protocol_hint,
+        vendor_id=payload.vendor_id,
+        product_id=payload.product_id,
+        manufacturer=payload.manufacturer,
+        model=payload.model,
+        device_class=payload.device_class,
+        is_non_oem=payload.is_non_oem,
+    )
+    try:
+        result = container.device_service.execute_onboarding(
+            device_id=payload.device_id,
+            connector_type=payload.connector_type,
+            host=payload.host,
+            port=payload.port,
+            path=payload.path,
+            baudrate=payload.baudrate,
+            vendor=payload.vendor,
+            device_type=payload.device_type,
+            scan=scan,
+            dry_run=payload.dry_run,
+            min_confidence=payload.min_confidence,
+            allow_generic_driver=payload.allow_generic_driver,
         )
-
-    uses_generic = any(item["source"] == "os-default" for item in scan.driver_candidates)
-    if uses_generic and not payload.allow_generic_driver:
-        raise HTTPException(
-            status_code=400,
-            detail="generic driver requires explicit approval via allow_generic_driver=true",
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception(
+            "Unexpected error during onboarding",
+            extra={"device_id": payload.device_id},
         )
+        raise HTTPException(status_code=500, detail="Internal server error") from exc
 
-    config = {
-        "device_id": payload.device_id,
-        "type": payload.connector_type,
-        "vendor": payload.vendor,
-        "device_type": payload.device_type,
-        "protocol": scan.protocol,
-        "baudrate": payload.baudrate,
-    }
-    if payload.connector_type == "tcp":
-        if payload.host is None or payload.port is None:
-            raise HTTPException(status_code=400, detail="host and port are required for tcp connector")
-        config["host"] = payload.host
-        config["port"] = payload.port
-    else:
-        if payload.path is None:
-            raise HTTPException(status_code=400, detail="path is required for serial connector")
-        config["path"] = payload.path
-
-    if payload.dry_run:
-        repository.add_audit_event(
+    if result.status == "planned":
+        container.query_service.add_audit_event(
             event_type="device_onboarding_planned",
             payload={
                 "device_id": payload.device_id,
@@ -323,118 +281,103 @@ def execute_device_onboarding(payload: OnboardingExecuteRequest, _auth: Auth) ->
                 "transport": scan.transport,
             },
         )
-        return OnboardingExecuteResponse(status="planned", device_id=payload.device_id, scan=scan)
 
-    try:
-        device_manager.add_device(config)
-    except ValueError as exc:
-        logger.warning("Device onboarding failed", extra={"device_id": payload.device_id, "error": str(exc)})
-        raise HTTPException(status_code=400, detail="Invalid device configuration") from exc
-    except Exception as exc:
-        logger.exception("Unexpected error during onboarding", extra={"device_id": payload.device_id})
-        raise HTTPException(status_code=500, detail="Internal server error") from exc
+    return OnboardingExecuteResponse(
+        status=result.status,
+        device_id=result.device_id,
+        scan=DeviceScanResponse(
+            identity=scan.identity,
+            protocol=scan.protocol,
+            device_class=scan.device_class,
+            confidence=scan.confidence,
+            driver_candidates=scan.driver_candidates,
+            install_plan=scan.install_plan,
+            transport=scan.transport,
+            connectivity_profile=scan.connectivity_profile,
+            quick_link=scan.quick_link,
+        ),
+    )
 
-    return OnboardingExecuteResponse(status="registered", device_id=payload.device_id, scan=scan)
 
 @app.post("/devices/{device_id}/command")
 def send_device_command(device_id: str, payload: CommandRequest, _auth: Auth) -> dict[str, str]:
+    container = _get_container()
     try:
-        device_manager.send_command(device_id, payload.command)
+        return container.device_service.send_command(device_id, payload.command)
     except KeyError:
         raise HTTPException(status_code=404, detail="Device not found") from None
     except Exception as exc:
-        logger.warning("Command failed", extra={"device_id": device_id, "error": str(exc)})
-        alerts.emit(severity="error", message=f"Command failed for {device_id}", device_id=device_id)
+        container.device_service.emit_command_error(device_id, exc)
         raise HTTPException(status_code=400, detail="Failed to send command") from exc
-    return {"status": "sent", "device_id": device_id}
 
 
 @app.post("/devices/{device_id}/routing")
-def set_device_routing(device_id: str, payload: RoutingPolicyRequest, _auth: Auth) -> dict[str, str]:
-    pipeline.router.set_policy(device_id, payload.policy)
-    return {"status": "updated", "device_id": device_id, "policy": payload.policy}
+def set_device_routing(
+    device_id: str, payload: RoutingPolicyRequest, _auth: Auth
+) -> dict[str, str]:
+    container = _get_container()
+    return container.ingest_service.set_device_routing(device_id, payload.policy)
 
 
 @app.post("/mode")
 def set_mode(payload: ModeRequest, _auth: Auth) -> dict[str, str]:
-    _mode.set(payload.mode)
-    return {"status": "updated", "mode": _mode.get()}
+    container = _get_container()
+    result = container.mode_service.set(payload.mode)
+    return {"status": "updated", "mode": result.mode}
 
 
 @app.get("/mode")
 def get_mode(_auth: Auth) -> dict[str, str]:
-    return {"mode": _mode.get()}
+    container = _get_container()
+    result = container.mode_service.get_status()
+    return {"mode": result.mode}
 
 
 @app.post("/ingest", response_model=IngestResponse)
 async def ingest(payload: IngestRequest, _auth: Auth) -> IngestResponse:
-    repository.save_log(device_id=payload.device_id, raw_data=payload.chunk, status="received")
-
-    current_mode = _mode.get()
-    if current_mode == CommunicationMode.LOCAL_ONLY:
-        pipeline.router.set_policy(payload.device_id, "offline")
-    elif current_mode == CommunicationMode.CLOUD_ONLY:
-        pipeline.router.set_policy(payload.device_id, "gula")
-
-    results = await pipeline.process_chunk(
+    container = _get_container()
+    result = await container.ingest_service.ingest(
         device_id=payload.device_id,
-        fallback_patient_id=payload.patient_id,
-        chunk=payload.chunk.encode("latin-1", errors="ignore"),
+        patient_id=payload.patient_id,
+        chunk=payload.chunk,
         vendor=payload.vendor,
         barcode=payload.barcode,
+        current_mode=container.mode_service.get(),
     )
-
-    if pipeline.retry_queue.size() > 0:
-        while pipeline.retry_queue.size() > 0:
-            item = pipeline.retry_queue.dequeue()
-            if item is None:
-                break
-            repository.enqueue_offline(item)
-            sync_engine.stage(
-                item_id=str(uuid.uuid4()),
-                device_id=item["device_id"],
-                payload=item,
-                version=1,
-            )
-
-    repository.save_results(results)
-    return IngestResponse(status="ok", processed=len(results), results=results)
+    return IngestResponse(status=result.status, processed=result.processed, results=result.results)
 
 
 @app.post("/edge/sync")
 async def sync_edge_buffer(_auth: Auth) -> dict[str, int]:
-    async def sender(payload: dict) -> dict:
-        pipeline.edge_buffer.enqueue(payload)
-        return {"status": "ok"}
-
-    return await sync_engine.sync(sender)
+    container = _get_container()
+    return await container.ingest_service.sync_edge_buffer()
 
 
 @app.get("/alerts")
 def list_alerts(_auth: Auth, limit: int = 100, offset: int = 0) -> list[dict[str, str]]:
-    all_alerts = alerts.list_alerts()
-    return all_alerts[offset: offset + limit]
+    container = _get_container()
+    return container.query_service.list_alerts(limit=limit, offset=offset)
 
 
 @app.get("/results")
 def list_results(_auth: Auth, limit: int = 100, offset: int = 0) -> list[dict]:
-    all_results = repository.list_results()
-    return all_results[offset: offset + limit]
+    container = _get_container()
+    return container.query_service.list_results(limit=limit, offset=offset)
 
 
 @app.get("/logs")
 def list_logs(_auth: Auth, limit: int = 100, offset: int = 0) -> list[dict]:
-    all_logs = repository.list_logs()
-    return all_logs[offset: offset + limit]
+    container = _get_container()
+    return container.query_service.list_logs(limit=limit, offset=offset)
 
 
 @app.get("/audit")
 def list_audit(_auth: Auth, limit: int = 100, offset: int = 0) -> list[dict]:
-    all_audit = repository.list_audit_trail()
-    return all_audit[offset: offset + limit]
+    container = _get_container()
+    return container.query_service.list_audit_trail(limit=limit, offset=offset)
 
 
 @app.get("/offline-queue")
 def list_offline_queue(_auth: Auth, limit: int = 100, offset: int = 0) -> list[dict]:
-    all_queue = repository.list_offline_queue()
-    return all_queue[offset: offset + limit]
+    container = _get_container()
+    return container.query_service.list_offline_queue(limit=limit, offset=offset)

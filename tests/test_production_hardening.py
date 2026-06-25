@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import threading
-import time
-from unittest.mock import AsyncMock, patch
-
-import pytest
+from unittest.mock import patch
 
 from app.core.alerting import AlertManager
 from app.core.modes import CommunicationMode
@@ -49,17 +46,17 @@ class TestAlertManagerBounded:
 
 class TestThreadSafeMode:
     def test_get_set(self) -> None:
-        from app.main import _ThreadSafeMode
+        from app.services.mode_service import ModeService
 
-        mode = _ThreadSafeMode()
+        mode = ModeService()
         assert mode.get() == CommunicationMode.HYBRID
         mode.set(CommunicationMode.LOCAL_ONLY)
         assert mode.get() == CommunicationMode.LOCAL_ONLY
 
     def test_thread_safety(self) -> None:
-        from app.main import _ThreadSafeMode
+        from app.services.mode_service import ModeService
 
-        mode = _ThreadSafeMode()
+        mode = ModeService()
         errors: list[str] = []
 
         def writer():
@@ -207,7 +204,7 @@ class TestHealthEndpoint:
         assert response.status_code == 200
         body = response.json()
         assert body["status"] == "ok"
-        assert body["version"] == "1.1.0"
+        assert body["version"] == "1.2.0"
         assert "checks" in body
 
 

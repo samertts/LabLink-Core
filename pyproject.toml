@@ -1,6 +1,6 @@
 [project]
 name = "lablink-core"
-version = "1.1.0"
+version = "1.2.0"
 description = "LabLink Core - Laboratory Device Integration Platform"
 readme = "README.md"
 license = {text = "MIT"}

@@ -6,6 +6,24 @@
 - Added structured logging with crash logs under `storage/logs`.
 - Added Windows PyInstaller + Inno Setup build pipeline via GitHub Actions.
 
+## 1.2.0 - 2026-06-25
+
+### Architecture
+- **Service Layer Extraction**: Refactored monolithic `app/main.py` (440 lines) into clean service layer following SOLID and Clean Architecture principles.
+  - `app/services/device_service.py`: Device registration, listing, command sending, onboarding, and scanning.
+  - `app/services/ingest_service.py`: Data ingestion pipeline orchestration, retry queue draining, edge sync.
+  - `app/services/health_service.py`: Health check and readiness probe logic.
+  - `app/services/mode_service.py`: Thread-safe communication mode management (replaces `_ThreadSafeMode`).
+  - `app/services/query_service.py`: Paginated read access to all persisted data (results, logs, audit, alerts, offline queue).
+  - `app/services/service_container.py`: Centralized dependency injection container wiring all services together.
+- `app/main.py` is now a thin HTTP routing layer (~300 lines) delegating to services.
+- All business logic extracted from API handlers into independently testable service classes.
+
+### Tests
+- Added 30 new service-layer unit tests across `tests/test_services.py` and `tests/test_services_extended.py`.
+- Total test count: 85 tests (up from 55).
+- Tests cover: DeviceService (register, list, command, scan, onboarding), HealthService, ModeService, QueryService (pagination, audit events).
+
 ## 1.1.0 - 2026-06-25
 
 ### Security (Critical)

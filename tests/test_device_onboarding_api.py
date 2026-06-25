@@ -1,9 +1,18 @@
+from __future__ import annotations
+
 from fastapi.testclient import TestClient
 
 import app.main as main
+from app.core.alerting import AlertManager
 from app.core.connection_pool import ConnectionPool
 from app.core.device_manager import DeviceManager
+from app.core.device_onboarding import DeviceOnboardingDirector
 from app.security.auth import _get_or_generate_api_key
+from app.services.device_service import DeviceService
+from app.services.query_service import QueryService
+from app.services.service_container import ServiceContainer
+from app.storage.db import InMemoryDB
+from app.storage.result_repository import LogRepository, ResultRepository
 
 
 class FakeConnector:
@@ -24,6 +33,29 @@ class FakeConnector:
 class DummyDeviceManager(DeviceManager):
     def _build_connector(self, config: dict):  # type: ignore[override]
         return FakeConnector(config["device_id"])
+
+
+def _make_container_with_dummy_dm() -> ServiceContainer:
+    db = InMemoryDB()
+    dm = DummyDeviceManager(pool=ConnectionPool())
+    alerts = AlertManager()
+    director = DeviceOnboardingDirector()
+    ds = DeviceService(device_manager=dm, onboarding_director=director, alerts=alerts)
+    repo = ResultRepository(db)
+    log_repo = LogRepository(db)
+    qs = QueryService(repository=repo, alerts=alerts)
+    return ServiceContainer(
+        db=db,
+        repository=repo,
+        log_repository=log_repo,
+        device_service=ds,
+        ingest_service=None,  # type: ignore[arg-type]
+        health_service=None,  # type: ignore[arg-type]
+        mode_service=None,  # type: ignore[arg-type]
+        query_service=qs,
+        pipeline=None,  # type: ignore[arg-type]
+        alerts=alerts,
+    )
 
 
 def test_scan_endpoint_returns_plan() -> None:
@@ -79,7 +111,8 @@ def test_scan_endpoint_enables_non_oem_quick_link_profile() -> None:
 
 
 def test_execute_endpoint_registers_device(monkeypatch) -> None:
-    monkeypatch.setattr(main, "device_manager", DummyDeviceManager(pool=ConnectionPool()))
+    container = _make_container_with_dummy_dm()
+    monkeypatch.setattr(main, "_container", container)
 
     client = TestClient(main.app)
     headers = {"x-api-key": _get_or_generate_api_key()}
@@ -108,7 +141,8 @@ def test_execute_endpoint_registers_device(monkeypatch) -> None:
 
 
 def test_execute_endpoint_validates_tcp_requirements(monkeypatch) -> None:
-    monkeypatch.setattr(main, "device_manager", DummyDeviceManager(pool=ConnectionPool()))
+    container = _make_container_with_dummy_dm()
+    monkeypatch.setattr(main, "_container", container)
 
     client = TestClient(main.app)
     headers = {"x-api-key": _get_or_generate_api_key()}
@@ -135,7 +169,8 @@ def test_execute_endpoint_validates_tcp_requirements(monkeypatch) -> None:
 
 
 def test_execute_endpoint_supports_dry_run_mode(monkeypatch) -> None:
-    monkeypatch.setattr(main, "device_manager", DummyDeviceManager(pool=ConnectionPool()))
+    container = _make_container_with_dummy_dm()
+    monkeypatch.setattr(main, "_container", container)
 
     client = TestClient(main.app)
     headers = {"x-api-key": _get_or_generate_api_key()}
