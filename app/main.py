@@ -35,9 +35,11 @@ async def lifespan(application: FastAPI):
     _container = create_service_container(settings)
     if settings.worker_enabled:
         _container.worker.start()
+    _container.plugin_manager.startup()
     logger.info("LabLink Core started (v1.3.0)")
     yield
     logger.info("Shutting down LabLink Core...")
+    _container.plugin_manager.shutdown()
     _container.worker.stop()
     _container.device_service.shutdown()
     await _container.pipeline.gula_client.close()
@@ -395,3 +397,124 @@ def list_audit(_auth: Auth, limit: int = 100, offset: int = 0) -> list[dict]:
 def list_offline_queue(_auth: Auth, limit: int = 100, offset: int = 0) -> list[dict]:
     container = _get_container()
     return container.query_service.list_offline_queue(limit=limit, offset=offset)
+
+
+# ── Plugin Management Endpoints ────────────────────────────────────
+
+
+class PluginConfigRequest(BaseModel):
+    key: str = Field(min_length=1, max_length=128)
+    value: str
+
+
+@app.get("/plugins")
+def list_plugins(_auth: Auth) -> list[dict]:
+    container = _get_container()
+    return container.plugin_manager.summary()
+
+
+@app.get("/plugins/capabilities")
+def list_plugin_capabilities(_auth: Auth) -> dict[str, list[str]]:
+    container = _get_container()
+    return container.plugin_manager.capabilities()
+
+
+@app.get("/plugins/{name}")
+def get_plugin(name: str, _auth: Auth) -> dict:
+    container = _get_container()
+    record = container.plugin_manager.registry.get_record(name)
+    if record is None:
+        raise HTTPException(status_code=404, detail=f"Plugin '{name}' not found")
+    return {
+        "name": record.manifest.name,
+        "version": record.manifest.version,
+        "description": record.manifest.description,
+        "author": record.manifest.author,
+        "state": record.state.value,
+        "error": record.error,
+        "provides": record.plugin.capabilities(),
+        "requires": record.manifest.requires,
+        "activation_count": record.activation_count,
+    }
+
+
+@app.post("/plugins/{name}/activate")
+def activate_plugin(name: str, _auth: Auth) -> dict[str, str]:
+    container = _get_container()
+    try:
+        container.plugin_manager.activate_plugin(name)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Plugin '{name}' not found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "activated", "plugin": name}
+
+
+@app.post("/plugins/{name}/deactivate")
+def deactivate_plugin(name: str, _auth: Auth) -> dict[str, str]:
+    container = _get_container()
+    try:
+        container.plugin_manager.deactivate_plugin(name)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Plugin '{name}' not found") from None
+    return {"status": "deactivated", "plugin": name}
+
+
+@app.post("/plugins/{name}/reload")
+def reload_plugin(name: str, _auth: Auth) -> dict[str, str]:
+    container = _get_container()
+    try:
+        container.plugin_manager.reload_plugin(name)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Plugin '{name}' not found") from None
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "reloaded", "plugin": name}
+
+
+@app.get("/plugins/health")
+def plugin_health(_auth: Auth) -> dict:
+    container = _get_container()
+    results = container.plugin_manager.health_checker.check_all()
+    return {
+        "overall": container.plugin_manager.health_checker.get_overall_status(),
+        "plugins": [
+            {
+                "name": r.plugin_name,
+                "status": r.status,
+                "message": r.message,
+                "duration_ms": round(r.duration_ms, 2),
+            }
+            for r in results
+        ],
+    }
+
+
+@app.get("/plugins/{name}/health")
+def plugin_health_single(name: str, _auth: Auth) -> dict:
+    container = _get_container()
+    result = container.plugin_manager.health_checker.check_plugin(name)
+    return {
+        "name": result.plugin_name,
+        "status": result.status,
+        "message": result.message,
+        "details": result.details,
+        "duration_ms": round(result.duration_ms, 2),
+    }
+
+
+@app.get("/plugins/{name}/config")
+def get_plugin_config(name: str, _auth: Auth) -> dict:
+    container = _get_container()
+    if not container.plugin_manager.registry.has(name):
+        raise HTTPException(status_code=404, detail=f"Plugin '{name}' not found")
+    return container.plugin_manager.get_plugin_config(name)
+
+
+@app.put("/plugins/{name}/config")
+def set_plugin_config(name: str, payload: PluginConfigRequest, _auth: Auth) -> dict[str, str]:
+    container = _get_container()
+    if not container.plugin_manager.registry.has(name):
+        raise HTTPException(status_code=404, detail=f"Plugin '{name}' not found")
+    container.plugin_manager.set_plugin_config(name, payload.key, payload.value)
+    return {"status": "updated", "plugin": name, "key": payload.key}

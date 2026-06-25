@@ -14,6 +14,7 @@ from app.observability.tracing import Tracer
 from app.pipeline.data_pipeline import DataPipeline
 from app.pipeline.normalizer import Normalizer
 from app.pipeline.parser_engine import ASTMParser
+from app.plugins.manager import PluginManager
 from app.services.device_service import DeviceService
 from app.services.health_service import HealthService
 from app.services.ingest_service import IngestService
@@ -46,6 +47,7 @@ class ServiceContainer:
     metrics: MetricsCollector
     tracer: Tracer
     worker: BackgroundWorker
+    plugin_manager: PluginManager
 
 
 def create_service_container(settings: AppSettings | None = None) -> ServiceContainer:
@@ -98,6 +100,12 @@ def create_service_container(settings: AppSettings | None = None) -> ServiceCont
     mode_service = ModeService()
     query_service = QueryService(repository=repository, alerts=alerts)
 
+    plugin_manager = PluginManager(
+        event_bus=event_bus,
+        plugin_dirs=["plugins"],
+        platform_version=settings.version,
+    )
+
     return ServiceContainer(
         settings=settings,
         db=db,
@@ -114,4 +122,5 @@ def create_service_container(settings: AppSettings | None = None) -> ServiceCont
         metrics=metrics,
         tracer=tracer,
         worker=worker,
+        plugin_manager=plugin_manager,
     )

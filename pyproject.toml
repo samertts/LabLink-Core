@@ -74,6 +74,7 @@ ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
 "app/desktop/window.py" = ["N806"]
+"app/plugins/base.py" = ["B024", "B027"]
 
 [tool.coverage.run]
 source = ["app"]

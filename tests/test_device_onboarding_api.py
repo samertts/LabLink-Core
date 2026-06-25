@@ -11,6 +11,7 @@ from app.core.device_onboarding import DeviceOnboardingDirector
 from app.events.base import EventBus
 from app.observability.metrics import MetricsCollector
 from app.observability.tracing import Tracer
+from app.plugins.manager import PluginManager
 from app.security.auth import _get_or_generate_api_key
 from app.services.device_service import DeviceService
 from app.services.query_service import QueryService
@@ -65,6 +66,7 @@ def _make_container_with_dummy_dm() -> ServiceContainer:
         metrics=MetricsCollector(),
         tracer=Tracer(),
         worker=BackgroundWorker(),
+        plugin_manager=PluginManager(event_bus=EventBus()),
     )
 
 
