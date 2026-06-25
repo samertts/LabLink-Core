@@ -8,12 +8,15 @@ from typing import Annotated, Literal
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from starlette.responses import PlainTextResponse
 
 from app.config.settings import get_settings
 from app.core.modes import CommunicationMode
+from app.log_config.setup import configure_logging
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.pipeline.normalizer import NormalizedResult
 from app.security.auth import verify_api_key
+from app.security.middleware import SecurityHeadersMiddleware
 from app.security.models import Permission
 from app.security.rbac import CurrentUser
 from app.services.service_container import ServiceContainer, create_service_container
@@ -35,6 +38,7 @@ def _get_container() -> ServiceContainer:
 async def lifespan(application: FastAPI):
     global _container
     settings = get_settings()
+    configure_logging(json_format=(settings.log_format == "json"))
     _container = create_service_container(settings)
     if settings.worker_enabled:
         _container.worker.start()
@@ -60,6 +64,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(RateLimitMiddleware, max_requests=200, window_seconds=60)
+app.add_middleware(SecurityHeadersMiddleware)
 
 Auth = Annotated[str, Depends(verify_api_key)]
 
@@ -164,10 +169,25 @@ def metrics() -> dict:
     return container.metrics.get_all_metrics()
 
 
+@app.get("/metrics/prometheus")
+def metrics_prometheus() -> PlainTextResponse:
+    container = _get_container()
+    return PlainTextResponse(content=container.metrics.prometheus_format(), media_type="text/plain; version=0.0.4; charset=utf-8")
+
+
 @app.get("/traces")
 def traces(limit: int = 50) -> list[str]:
     container = _get_container()
     return container.tracer.get_recent_traces(limit=limit)
+
+
+@app.get("/traces/{trace_id}")
+def trace_detail(trace_id: str) -> list[dict]:
+    container = _get_container()
+    spans = container.tracer.get_trace(trace_id)
+    if not spans:
+        raise HTTPException(status_code=404, detail="Trace not found")
+    return spans
 
 
 @app.post("/devices/register")

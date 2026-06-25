@@ -19,11 +19,10 @@ class MetricPoint:
 
 
 class MetricsCollector:
-    """In-memory metrics collector.
+    """In-memory metrics collector with Prometheus exposition format.
 
-    Stores counters, gauges, and histograms.  Designed for future
-    Prometheus/OpenTelemetry integration without coupling to external
-    libraries now.
+    Stores counters, gauges, and histograms.  Emits Prometheus-compatible
+    text exposition on ``prometheus_format()``.
     """
 
     def __init__(self) -> None:
@@ -33,6 +32,14 @@ class MetricsCollector:
         self._histograms: dict[str, list[float]] = defaultdict(list)
         self._points: list[MetricPoint] = []
         self._max_points = 10000
+        self._counter_metadata: dict[str, str] = {}
+        self._gauge_metadata: dict[str, str] = {}
+
+    def register_counter(self, name: str, help_text: str = "") -> None:
+        self._counter_metadata[name] = help_text
+
+    def register_gauge(self, name: str, help_text: str = "") -> None:
+        self._gauge_metadata[name] = help_text
 
     def increment(self, name: str, value: float = 1.0, tags: dict[str, str] | None = None) -> None:
         key = self._make_key(name, tags)
@@ -93,6 +100,49 @@ class MetricsCollector:
                 "histograms": {k: len(v) for k, v in self._histograms.items()},
             }
 
+    def prometheus_format(self) -> str:
+        """Render all metrics in Prometheus text exposition format."""
+        lines: list[str] = []
+
+        with self._lock:
+            # Counters
+            for key, value in self._counters.items():
+                base_name, labels = self._parse_key(key)
+                help_text = self._counter_metadata.get(base_name, "")
+                if help_text and not any(line.startswith(f"# HELP {base_name}") for line in lines):
+                    lines.append(f"# HELP {base_name} {help_text}")
+                    lines.append(f"# TYPE {base_name} counter")
+                label_str = f"{{{labels}}}" if labels else ""
+                lines.append(f"{base_name}{label_str} {value}")
+
+            # Gauges
+            for key, value in self._gauges.items():
+                base_name, labels = self._parse_key(key)
+                help_text = self._gauge_metadata.get(base_name, "")
+                if help_text and not any(line.startswith(f"# HELP {base_name}") for line in lines):
+                    lines.append(f"# HELP {base_name} {help_text}")
+                    lines.append(f"# TYPE {base_name} gauge")
+                label_str = f"{{{labels}}}" if labels else ""
+                lines.append(f"{base_name}{label_str} {value}")
+
+            # Histograms
+            for key, values in self._histograms.items():
+                base_name, labels = self._parse_key(key)
+                if not values:
+                    continue
+                sorted_vals = sorted(values)
+                n = len(sorted_vals)
+                label_str = f"{{{labels}}}" if labels else ""
+                lines.append(f"# TYPE {base_name} histogram")
+                lines.append(f"{base_name}_count{label_str} {n}")
+                lines.append(f"{base_name}_sum{label_str} {sum(sorted_vals)}")
+                for _pct, val in [(0.5, sorted_vals[n // 2]), (0.95, sorted_vals[int(n * 0.95)]), (0.99, sorted_vals[min(int(n * 0.99), n - 1)]), (1.0, sorted_vals[-1])]:
+                    bucket_label = f'le="{val}"'
+                    all_labels = f"{labels},{bucket_label}" if labels else bucket_label
+                    lines.append(f"{base_name}_bucket{{{all_labels}}} {n}")
+
+        return "\n".join(lines) + "\n"
+
     def reset(self) -> None:
         with self._lock:
             self._counters.clear()
@@ -111,5 +161,15 @@ class MetricsCollector:
     def _make_key(name: str, tags: dict[str, str] | None) -> str:
         if not tags:
             return name
-        sorted_tags = ",".join(f"{k}={v}" for k, v in sorted(tags.items()))
-        return f"{name}{{{sorted_tags}}}"
+        sorted_tags = ",".join(f'{k}="{v}"' for k, v in sorted(tags.items()))
+        return f'{name}{{{sorted_tags}}}'
+
+    @staticmethod
+    def _parse_key(key: str) -> tuple[str, str]:
+        """Split 'name{k="v",...}' into ('name', 'k="v",...')."""
+        if "{" not in key:
+            return key, ""
+        idx = key.index("{")
+        base = key[:idx]
+        labels = key[idx + 1:-1] if key.endswith("}") else key[idx + 1:]
+        return base, labels

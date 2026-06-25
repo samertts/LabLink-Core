@@ -1,4 +1,4 @@
-from app.observability.metrics import MetricsCollector
-from app.observability.tracing import Tracer
+from app.observability.metrics import MetricPoint, MetricsCollector
+from app.observability.tracing import Span, Tracer
 
-__all__ = ["MetricsCollector", "Tracer"]
+__all__ = ["MetricPoint", "MetricsCollector", "Span", "Tracer"]
