@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import threading
-from unittest.mock import patch
 
 from app.core.alerting import AlertManager
 from app.core.modes import CommunicationMode

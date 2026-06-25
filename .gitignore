@@ -5,3 +5,5 @@ __pycache__/
 storage/data/*.db
 storage/logs/*.json
 storage/runtime_config.json
+.coverage
+lablink_core.egg-info/

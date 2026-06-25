@@ -8,7 +8,7 @@ from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from app.config.settings import AppSettings, get_settings
+from app.config.settings import get_settings
 from app.core.modes import CommunicationMode
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.pipeline.normalizer import NormalizedResult
