@@ -13,6 +13,11 @@ from app.services.query_service import QueryService
 from app.services.service_container import ServiceContainer
 from app.storage.db import InMemoryDB
 from app.storage.result_repository import LogRepository, ResultRepository
+from app.events.base import EventBus
+from app.observability.metrics import MetricsCollector
+from app.observability.tracing import Tracer
+from app.tasks.worker import BackgroundWorker
+from app.config.settings import AppSettings
 
 
 class FakeConnector:
@@ -45,6 +50,7 @@ def _make_container_with_dummy_dm() -> ServiceContainer:
     log_repo = LogRepository(db)
     qs = QueryService(repository=repo, alerts=alerts)
     return ServiceContainer(
+        settings=AppSettings(),
         db=db,
         repository=repo,
         log_repository=log_repo,
@@ -55,6 +61,10 @@ def _make_container_with_dummy_dm() -> ServiceContainer:
         query_service=qs,
         pipeline=None,  # type: ignore[arg-type]
         alerts=alerts,
+        event_bus=EventBus(),
+        metrics=MetricsCollector(),
+        tracer=Tracer(),
+        worker=BackgroundWorker(),
     )
 
 

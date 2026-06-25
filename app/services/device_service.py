@@ -7,6 +7,9 @@ from typing import Any
 from app.core.alerting import AlertManager
 from app.core.device_manager import DeviceManager
 from app.core.device_onboarding import DeviceFingerprint, DeviceOnboardingDirector
+from app.events.base import EventBus
+from app.events.domain import AlertRaised, DeviceConnected, DeviceRegistered
+from app.observability.metrics import MetricsCollector
 
 logger = logging.getLogger("lablink.services.device")
 
@@ -54,14 +57,33 @@ class DeviceService:
         device_manager: DeviceManager,
         onboarding_director: DeviceOnboardingDirector,
         alerts: AlertManager,
+        event_bus: EventBus | None = None,
+        metrics: MetricsCollector | None = None,
     ) -> None:
         self._device_manager = device_manager
         self._onboarding_director = onboarding_director
         self._alerts = alerts
+        self._event_bus = event_bus
+        self._metrics = metrics
 
     def register_device(self, config: dict[str, Any]) -> dict[str, str]:
         self._device_manager.add_device(config)
-        return {"status": "registered", "device_id": str(config["device_id"])}
+        device_id = str(config["device_id"])
+
+        if self._metrics:
+            self._metrics.increment("device.registered")
+        if self._event_bus:
+            self._event_bus.publish(
+                DeviceRegistered(
+                    device_id=device_id,
+                    vendor=config.get("vendor", "unknown"),
+                    device_type=config.get("device_type", "unknown"),
+                    protocol=config.get("protocol", "ASTM"),
+                    source="device_service",
+                )
+            )
+
+        return {"status": "registered", "device_id": device_id}
 
     def list_devices(self) -> list[DeviceInfo]:
         return [
@@ -83,6 +105,8 @@ class DeviceService:
 
     def send_command(self, device_id: str, command: str) -> dict[str, str]:
         self._device_manager.send_command(device_id, command)
+        if self._metrics:
+            self._metrics.increment("device.command_sent", tags={"device_id": device_id})
         return {"status": "sent", "device_id": device_id}
 
     def emit_command_error(self, device_id: str, error: Exception) -> None:
@@ -91,6 +115,12 @@ class DeviceService:
             message=f"Command failed for {device_id}",
             device_id=device_id,
         )
+        if self._event_bus:
+            self._event_bus.publish(
+                AlertRaised(severity="error", message=f"Command failed for {device_id}", device_id=device_id, source="device_service")
+            )
+        if self._metrics:
+            self._metrics.increment("device.command_error", tags={"device_id": device_id})
         logger.warning("Command failed", extra={"device_id": device_id, "error": str(error)})
 
     def scan_device(
@@ -199,6 +229,12 @@ class DeviceService:
             return OnboardingResult(status="planned", device_id=device_id, scan=scan)
 
         self._device_manager.add_device(config)
+
+        if self._event_bus:
+            self._event_bus.publish(
+                DeviceConnected(device_id=device_id, connector_type=connector_type, source="device_service")
+            )
+
         return OnboardingResult(status="registered", device_id=device_id, scan=scan)
 
     def shutdown(self) -> None:

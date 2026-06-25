@@ -18,7 +18,7 @@ class TestHealthService:
         svc = HealthService(db=db)
         result = svc.check()
         assert result.status == "ok"
-        assert result.version == "1.2.0"
+        assert result.version == "1.3.0"
         assert result.checks["database"] == "ok"
 
     def test_check_db_error(self) -> None:

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import logging
+from contextlib import asynccontextmanager
 from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from app.config.settings import AppSettings, get_settings
 from app.core.modes import CommunicationMode
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.pipeline.normalizer import NormalizedResult
@@ -15,17 +17,6 @@ from app.services.service_container import ServiceContainer, create_service_cont
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("lablink.api")
-
-app = FastAPI(title="LabLink Core", version="1.2.0")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://127.0.0.1:8000", "http://localhost:8000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-app.add_middleware(RateLimitMiddleware, max_requests=200, window_seconds=60)
 
 _container: ServiceContainer | None = None
 
@@ -37,22 +28,33 @@ def _get_container() -> ServiceContainer:
     return _container
 
 
-@app.on_event("startup")
-async def startup_event() -> None:
+@asynccontextmanager
+async def lifespan(application: FastAPI):
     global _container
-    _container = create_service_container()
-    logger.info("LabLink Core started (v1.2.0)")
-
-
-@app.on_event("shutdown")
-async def shutdown_event() -> None:
-    container = _get_container()
+    settings = get_settings()
+    _container = create_service_container(settings)
+    if settings.worker_enabled:
+        _container.worker.start()
+    logger.info("LabLink Core started (v1.3.0)")
+    yield
     logger.info("Shutting down LabLink Core...")
-    container.device_service.shutdown()
-    await container.pipeline.gula_client.close()
-    container.db.close()
+    _container.worker.stop()
+    _container.device_service.shutdown()
+    await _container.pipeline.gula_client.close()
+    _container.db.close()
     logger.info("Shutdown complete.")
 
+
+app = FastAPI(title="LabLink Core", version="1.3.0", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://127.0.0.1:8000", "http://localhost:8000"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+app.add_middleware(RateLimitMiddleware, max_requests=200, window_seconds=60)
 
 Auth = Annotated[str, Depends(verify_api_key)]
 
@@ -149,6 +151,18 @@ def health() -> dict[str, str | dict[str, str]]:
     container = _get_container()
     result = container.health_service.check()
     return {"status": result.status, "version": result.version, "checks": result.checks}
+
+
+@app.get("/metrics")
+def metrics() -> dict:
+    container = _get_container()
+    return container.metrics.get_all_metrics()
+
+
+@app.get("/traces")
+def traces(limit: int = 50) -> list[str]:
+    container = _get_container()
+    return container.tracer.get_recent_traces(limit=limit)
 
 
 @app.post("/devices/register")

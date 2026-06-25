@@ -6,6 +6,61 @@
 - Added structured logging with crash logs under `storage/logs`.
 - Added Windows PyInstaller + Inno Setup build pipeline via GitHub Actions.
 
+## 1.3.0 - 2026-06-25
+
+### Phase 1 — Event Bus
+- **Production-grade publish/subscribe Event Bus** (`app/events/`).
+  - Thread-safe with `threading.Lock`.
+  - Async-compatible via `publish_async()`.
+  - Typed events with `EventMetadata` (event_id, timestamp, correlation_id, source, version).
+  - Event replay support via `get_history()`.
+  - Interceptor pipeline for event transformation.
+  - Wildcard subscription (`*`) for cross-cutting concerns.
+  - 12 domain events: DeviceConnected, DeviceDisconnected, DeviceRegistered, ResultReceived, ResultValidated, ResultNormalized, ResultStored, ResultExported, AlertRaised, SyncStarted, SyncCompleted, HealthChanged.
+
+### Phase 2 — Domain Events
+- Services now emit events through the EventBus on key operations.
+- DeviceService publishes DeviceRegistered, DeviceConnected, AlertRaised on device operations.
+- IngestService publishes ResultReceived, ResultNormalized, ResultStored, SyncStarted, SyncCompleted.
+- HealthService publishes HealthChanged on health checks.
+
+### Phase 3 — Dependency Injection
+- Replaced global mutable state with constructor-injected dependencies.
+- `ServiceContainer` now accepts `AppSettings` and passes all dependencies to services.
+- All services accept optional `EventBus` and `MetricsCollector` via constructors.
+- FastAPI `lifespan` replaces deprecated `on_event` handlers.
+
+### Phase 4 — Configuration System
+- Centralized typed settings (`app/config/settings.py`) using Pydantic `BaseSettings`.
+- Supports environment variables (prefixed `LABLINK_`), `.env` files, and defaults.
+- Settings: app_name, version, debug, environment, host, port, api_key, cors_origins, rate_limit, gula_url/lab_id, db_path, data_dir, log_level, worker settings, health_check_interval.
+- `get_settings()` singleton for application-wide access.
+
+### Phase 5 — Repository Abstraction
+- Abstract interfaces (`app/storage/repositories.py`): `ResultRepositoryProtocol`, `LogRepositoryProtocol`, `AuditRepository`, `OfflineQueueRepository`.
+- `ResultRepository` now implements all four protocols.
+- `LogRepository` implements `LogRepositoryProtocol`.
+- Business logic depends on interfaces; implementations are swappable for PostgreSQL, etc.
+
+### Phase 6 — Background Tasks
+- Thread-safe `BackgroundWorker` (`app/tasks/worker.py`).
+- Task queue with priority processing.
+- Handler registration by task name.
+- Periodic task scheduling.
+- Automatic retry with configurable max retries.
+- Task result tracking with status, duration, error capture.
+- Integrated into `ServiceContainer` with configurable poll interval.
+
+### Phase 7 — Observability Foundation
+- `MetricsCollector` (`app/observability/metrics.py`): counters, gauges, histograms with tag support and percentile stats.
+- `Tracer` (`app/observability/tracing.py`): in-process distributed tracing with spans, attributes, events, and trace history.
+- New API endpoints: `GET /metrics`, `GET /traces`.
+- Ready for future Prometheus/OpenTelemetry integration.
+
+### Tests
+- Added 52 new tests (137 total, up from 85).
+- Tests cover: EventBus (12 tests), Domain Events (1), Config (9), Observability (9), Tasks (8), Repositories (9), plus integration with existing services.
+
 ## 1.2.0 - 2026-06-25
 
 ### Architecture

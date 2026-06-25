@@ -6,6 +6,9 @@ from dataclasses import dataclass
 
 from app.core.modes import CommunicationMode
 from app.edge.sync_engine import SyncEngine
+from app.events.base import EventBus
+from app.events.domain import ResultNormalized, ResultReceived, ResultStored, SyncCompleted, SyncStarted
+from app.observability.metrics import MetricsCollector
 from app.pipeline.data_pipeline import DataPipeline
 from app.pipeline.normalizer import NormalizedResult
 from app.storage.result_repository import ResultRepository
@@ -28,10 +31,14 @@ class IngestService:
         pipeline: DataPipeline,
         repository: ResultRepository,
         sync_engine: SyncEngine,
+        event_bus: EventBus | None = None,
+        metrics: MetricsCollector | None = None,
     ) -> None:
         self._pipeline = pipeline
         self._repository = repository
         self._sync_engine = sync_engine
+        self._event_bus = event_bus
+        self._metrics = metrics
 
     async def ingest(
         self,
@@ -44,6 +51,13 @@ class IngestService:
         current_mode: CommunicationMode = CommunicationMode.HYBRID,
     ) -> IngestResult:
         self._repository.save_log(device_id=device_id, raw_data=chunk, status="received")
+
+        if self._event_bus:
+            self._event_bus.publish(
+                ResultReceived(device_id=device_id, patient_id=patient_id, chunk_length=len(chunk), source="ingest_service")
+            )
+        if self._metrics:
+            self._metrics.increment("ingest.received", tags={"device_id": device_id})
 
         if current_mode == CommunicationMode.LOCAL_ONLY:
             self._pipeline.router.set_policy(device_id, "offline")
@@ -58,8 +72,27 @@ class IngestService:
             barcode=barcode,
         )
 
+        if self._event_bus and results:
+            for result in results:
+                self._event_bus.publish(
+                    ResultNormalized(
+                        device_id=device_id,
+                        test_code=result.test_code,
+                        value=result.value,
+                        source="ingest_service",
+                    )
+                )
+
         self._drain_retry_queue()
         self._repository.save_results(results)
+
+        if self._event_bus and results:
+            self._event_bus.publish(
+                ResultStored(device_id=device_id, count=len(results), source="ingest_service")
+            )
+        if self._metrics:
+            self._metrics.increment("ingest.processed", tags={"device_id": device_id})
+            self._metrics.histogram("ingest.batch_size", len(results))
 
         return IngestResult(status="ok", processed=len(results), results=results)
 
@@ -77,11 +110,24 @@ class IngestService:
             )
 
     async def sync_edge_buffer(self) -> dict[str, int]:
+        if self._event_bus:
+            self._event_bus.publish(SyncStarted(source="ingest_service"))
+
         async def sender(payload: dict) -> dict:
             self._pipeline.edge_buffer.enqueue(payload)
             return {"status": "ok"}
 
-        return await self._sync_engine.sync(sender)
+        result = await self._sync_engine.sync(sender)
+
+        if self._event_bus:
+            self._event_bus.publish(
+                SyncCompleted(sent=result.get("sent", 0), failed=result.get("failed", 0), source="ingest_service")
+            )
+        if self._metrics:
+            self._metrics.increment("sync.completed")
+            self._metrics.gauge("sync.items_sent", result.get("sent", 0))
+
+        return result
 
     def set_device_routing(self, device_id: str, policy: str) -> dict[str, str]:
         self._pipeline.router.set_policy(device_id, policy)

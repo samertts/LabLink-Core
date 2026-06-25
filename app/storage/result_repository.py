@@ -7,9 +7,17 @@ from typing import Any
 
 from app.pipeline.normalizer import NormalizedResult
 from app.storage.db import InMemoryDB
+from app.storage.repositories import (
+    AuditRepository,
+    LogRepositoryProtocol,
+    OfflineQueueRepository,
+    ResultRepositoryProtocol,
+)
 
 
-class ResultRepository:
+class ResultRepository(ResultRepositoryProtocol, LogRepositoryProtocol, AuditRepository, OfflineQueueRepository):
+    """SQLite-backed repository implementing all persistence interfaces."""
+
     def __init__(self, db: InMemoryDB | None = None) -> None:
         self.db = db or InMemoryDB()
         self._legacy_items: list[NormalizedResult] = []
@@ -30,6 +38,9 @@ class ResultRepository:
 
     def list_results(self) -> list[dict]:
         return self.db.select_all("results")
+
+    def count_results(self) -> int:
+        return self.db.count("results")
 
     # Backward-compatible alias used by early phase tests.
     def list(self) -> list[Any]:
@@ -77,7 +88,7 @@ class ResultRepository:
         return self.db.select_all("audit_trail")
 
 
-class LogRepository:
+class LogRepository(LogRepositoryProtocol):
     """Backward-compatible repository facade for log persistence."""
 
     def __init__(self, db: InMemoryDB | None = None) -> None:
@@ -92,6 +103,19 @@ class LogRepository:
             "timestamp": entry.get("timestamp", datetime.now(timezone.utc).isoformat()),
         }
         self.db.insert("logs", payload)
+
+    def save_log(self, *, device_id: str, raw_data: str, status: str, error_message: str = "") -> None:
+        self.save(
+            {
+                "device_id": device_id,
+                "raw_data": raw_data,
+                "status": status,
+                "error_message": error_message,
+            }
+        )
+
+    def list_logs(self) -> list[dict]:
+        return self.db.select_all("logs")
 
     def list(self) -> list[dict]:
         return self.db.select_all("logs")

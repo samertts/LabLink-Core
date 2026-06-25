@@ -1,5 +1,5 @@
 #define MyAppName "LabLink Core"
-#define MyAppVersion "1.2.0"
+#define MyAppVersion "1.3.0"
 #define MyAppPublisher "LabLink"
 #define MyAppExeName "Application.exe"
 

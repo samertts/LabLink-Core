@@ -204,7 +204,7 @@ class TestHealthEndpoint:
         assert response.status_code == 200
         body = response.json()
         assert body["status"] == "ok"
-        assert body["version"] == "1.2.0"
+        assert body["version"] == "1.3.0"
         assert "checks" in body
 
 

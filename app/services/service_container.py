@@ -3,11 +3,15 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from app.config.settings import AppSettings, get_settings
 from app.core.alerting import AlertManager
 from app.core.device_manager import DeviceManager
 from app.core.device_onboarding import DeviceOnboardingDirector
 from app.edge.sync_engine import SyncEngine
+from app.events.base import EventBus
 from app.integration.gula_client import GulaClient
+from app.observability.metrics import MetricsCollector
+from app.observability.tracing import Tracer
 from app.pipeline.data_pipeline import DataPipeline
 from app.pipeline.normalizer import Normalizer
 from app.pipeline.parser_engine import ASTMParser
@@ -16,15 +20,19 @@ from app.services.health_service import HealthService
 from app.services.ingest_service import IngestService
 from app.services.mode_service import ModeService
 from app.services.query_service import QueryService
-from app.settings.paths import DATA_DIR
 from app.storage.db import InMemoryDB
 from app.storage.result_repository import LogRepository, ResultRepository
+from app.tasks.worker import BackgroundWorker
 
 
 @dataclass
 class ServiceContainer:
-    """Centralized dependency injection container for all application services."""
+    """Centralized dependency injection container for all application services.
 
+    All dependencies are injected — no mutable global runtime state.
+    """
+
+    settings: AppSettings
     db: InMemoryDB
     repository: ResultRepository
     log_repository: LogRepository
@@ -35,11 +43,18 @@ class ServiceContainer:
     query_service: QueryService
     pipeline: DataPipeline
     alerts: AlertManager
+    event_bus: EventBus
+    metrics: MetricsCollector
+    tracer: Tracer
+    worker: BackgroundWorker
 
 
-def create_service_container() -> ServiceContainer:
-    """Build and wire all services together."""
-    db = InMemoryDB(db_path=str(DATA_DIR / "lablink.db"))
+def create_service_container(settings: AppSettings | None = None) -> ServiceContainer:
+    """Build and wire all services together via dependency injection."""
+    if settings is None:
+        settings = get_settings()
+
+    db = InMemoryDB(db_path=settings.effective_db_path)
     repository = ResultRepository(db)
     log_repository = LogRepository(db)
 
@@ -48,13 +63,20 @@ def create_service_container() -> ServiceContainer:
     sync_engine = SyncEngine()
     onboarding_director = DeviceOnboardingDirector()
 
-    gula_url = os.getenv("LABLINK_GULA_URL", "http://gula.local")
-    gula_lab_id = os.getenv("LABLINK_GULA_LAB_ID", "LAB001")
+    event_bus = EventBus()
+    metrics = MetricsCollector()
+    tracer = Tracer()
+    worker = BackgroundWorker(
+        poll_interval=settings.worker_poll_interval_seconds,
+        max_retries=settings.worker_max_retries,
+    )
+
+    gula_client = GulaClient(base_url=settings.gula_url, lab_id=settings.gula_lab_id)
 
     pipeline = DataPipeline(
         parser=ASTMParser(),
         normalizer=Normalizer(),
-        gula_client=GulaClient(base_url=gula_url, lab_id=gula_lab_id),
+        gula_client=gula_client,
         result_repo=repository,
         log_repo=log_repository,
     )
@@ -63,17 +85,22 @@ def create_service_container() -> ServiceContainer:
         device_manager=device_manager,
         onboarding_director=onboarding_director,
         alerts=alerts,
+        event_bus=event_bus,
+        metrics=metrics,
     )
     ingest_service = IngestService(
         pipeline=pipeline,
         repository=repository,
         sync_engine=sync_engine,
+        event_bus=event_bus,
+        metrics=metrics,
     )
-    health_service = HealthService(db=db)
+    health_service = HealthService(db=db, event_bus=event_bus, metrics=metrics)
     mode_service = ModeService()
     query_service = QueryService(repository=repository, alerts=alerts)
 
     return ServiceContainer(
+        settings=settings,
         db=db,
         repository=repository,
         log_repository=log_repository,
@@ -84,4 +111,8 @@ def create_service_container() -> ServiceContainer:
         query_service=query_service,
         pipeline=pipeline,
         alerts=alerts,
+        event_bus=event_bus,
+        metrics=metrics,
+        tracer=tracer,
+        worker=worker,
     )
