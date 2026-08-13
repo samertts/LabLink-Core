@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import os
+
+os.environ.setdefault("LABLINK_JWT_SECRET_KEY", "test-secret-key-with-at-least-32-characters")
+
 import pytest
 
 from app.core.connection_pool import ConnectionPool

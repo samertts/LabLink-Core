@@ -23,10 +23,19 @@ class TestAppSettings:
         assert settings.effective_db_path == "/tmp/custom.db"
 
     def test_is_production(self) -> None:
-        settings = AppSettings(environment="production")
+        settings = AppSettings(
+            environment="production",
+            jwt_secret_key="test-secret-key-with-at-least-32-characters",
+        )
         assert settings.is_production is True
         dev_settings = AppSettings(environment="development")
         assert dev_settings.is_production is False
+
+    def test_production_rejects_short_jwt_secret(self) -> None:
+        import pytest
+
+        with pytest.raises(ValueError, match="at least 32 characters"):
+            AppSettings(environment="production", jwt_secret_key="too-short")
 
     def test_cors_origins_default(self) -> None:
         settings = AppSettings()

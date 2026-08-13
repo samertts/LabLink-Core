@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -61,6 +61,12 @@ class AppSettings(BaseSettings):
         p = Path(v) if isinstance(v, str) else v
         p.mkdir(parents=True, exist_ok=True)
         return p
+
+    @model_validator(mode="after")
+    def validate_production_secrets(self) -> "AppSettings":
+        if self.is_production and len(self.jwt_secret_key.strip()) < 32:
+            raise ValueError("LABLINK_JWT_SECRET_KEY must contain at least 32 characters in production")
+        return self
 
     @property
     def effective_db_path(self) -> str:
