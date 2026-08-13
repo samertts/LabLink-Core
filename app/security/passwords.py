@@ -4,11 +4,14 @@ from __future__ import annotations
 
 from passlib.context import CryptContext
 
-_pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+_pwd_context = CryptContext(
+    schemes=["bcrypt_sha256", "bcrypt"],
+    deprecated="auto",
+)
 
 
 def hash_password(plain: str) -> str:
-    """Return bcrypt hash of plaintext password."""
+    """Return a bcrypt-sha256 hash while preserving legacy bcrypt verification."""
     return _pwd_context.hash(plain)
 
 

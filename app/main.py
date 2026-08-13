@@ -11,10 +11,10 @@ from pydantic import BaseModel, Field
 from starlette.responses import PlainTextResponse
 
 from app.config.settings import get_settings
+from app.contracts.device_observation import PendingDeviceObservation
 from app.core.modes import CommunicationMode
 from app.log_config.setup import configure_logging
 from app.middleware.rate_limit import RateLimitMiddleware
-from app.pipeline.normalizer import NormalizedResult
 from app.security.auth import verify_api_key
 from app.security.middleware import SecurityHeadersMiddleware
 from app.security.models import Permission
@@ -75,12 +75,13 @@ class IngestRequest(BaseModel):
     chunk: str = Field(min_length=1, description="Raw ASTM chunk; may include control chars")
     vendor: str | None = None
     barcode: str | None = None
+    sample_id: str | None = None
 
 
 class IngestResponse(BaseModel):
     status: Literal["ok"]
     processed: int
-    results: list[NormalizedResult]
+    results: list[PendingDeviceObservation]
 
 
 class RegisterDeviceRequest(BaseModel):
@@ -381,6 +382,7 @@ async def ingest(payload: IngestRequest, _auth: Auth) -> IngestResponse:
         chunk=payload.chunk,
         vendor=payload.vendor,
         barcode=payload.barcode,
+        sample_id=payload.sample_id,
         current_mode=container.mode_service.get(),
     )
     return IngestResponse(status=result.status, processed=result.processed, results=result.results)

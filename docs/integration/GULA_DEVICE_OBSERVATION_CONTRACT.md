@@ -27,6 +27,12 @@ A device reading must never be exported as an approved clinical result. `build_p
 
 The idempotency key is derived from the sample, device, test, value, unit, and UTC observation timestamp. Replaying the same device message must resolve to the same observation identity. Transport retries must be safe and must not create duplicate observations.
 
+## Operational endpoint
+
+`POST /ingest` now accepts `sample_id` explicitly. For backward-compatible device payloads, `barcode` can supply the sample identifier when it is a verified barcode. If neither is present, the service fails before processing the result.
+
+Every accepted batch is persisted and returned as `pending_review` observations. The response includes `observation_id`, `sample_id`, provenance, and idempotency key; it never exposes a final clinical approval state.
+
 ## Integration boundary
 
 LabLink-Core may emit raw, parsed, and normalized events for operational traceability. Only the pending observation contract crosses into GULA. The transport must preserve provenance, idempotency, and timestamps, and must return a hard failure when `sample_id` or provenance is absent.
