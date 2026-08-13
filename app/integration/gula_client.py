@@ -3,9 +3,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-import uuid
+from collections.abc import Iterable
 from datetime import timezone
-from typing import Any, Iterable
+from typing import Any
 
 import httpx
 
