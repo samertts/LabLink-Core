@@ -61,37 +61,43 @@ class GulaClient:
         logger.error("GULA event delivery failed after %d attempts", self.max_retries)
         return {"status": "failed", "error": str(last_error) if last_error else "unknown_error"}
 
+    def build_pending_observation_envelope(
+        self, observation: PendingDeviceObservation
+    ) -> dict[str, Any]:
+        """Build the canonical pending envelope without granting clinical approval."""
+        event_id = "evt-" + hashlib.sha256(observation.idempotency_key.encode()).hexdigest()[:32]
+        return {
+            "event_id": event_id,
+            "event_type": "device.observation.pending",
+            "schema_version": 1,
+            "source_service": "lablink-core",
+            "tenant_id": self.lab_id,
+            "occurred_at": observation.observed_at.astimezone(timezone.utc).isoformat(),
+            "actor_id": observation.device_id,
+            "entity_id": observation.sample_id,
+            "correlation_id": event_id,
+            "idempotency_key": observation.idempotency_key,
+            "payload": {
+                "sample_id": observation.sample_id,
+                "observation_id": observation.observation_id,
+                "patient_id": observation.patient_id,
+                "device_id": observation.device_id,
+                "test_code": observation.test_code,
+                "value": observation.value,
+                "unit": observation.unit,
+                "reference_range": observation.reference_range,
+                "status": "pending_review",
+                "provenance": observation.provenance,
+            },
+        }
+
     async def send_pending_observations(
         self, observations: Iterable[PendingDeviceObservation]
     ) -> list[dict[str, Any]]:
         """Publish observations as pending events; never marks them approved."""
         responses: list[dict[str, Any]] = []
         for observation in observations:
-            event_id = "evt-" + hashlib.sha256(observation.idempotency_key.encode()).hexdigest()[:32]
-            envelope = {
-                "event_id": event_id,
-                "event_type": "device.observation.pending",
-                "schema_version": 1,
-                "source_service": "lablink-core",
-                "tenant_id": self.lab_id,
-                "occurred_at": observation.observed_at.astimezone(timezone.utc).isoformat(),
-                "actor_id": observation.device_id,
-                "entity_id": observation.sample_id,
-                "correlation_id": str(uuid.uuid4()),
-                "idempotency_key": observation.idempotency_key,
-                "payload": {
-                    "sample_id": observation.sample_id,
-                    "observation_id": observation.observation_id,
-                    "patient_id": observation.patient_id,
-                    "device_id": observation.device_id,
-                    "test_code": observation.test_code,
-                    "value": observation.value,
-                    "unit": observation.unit,
-                    "reference_range": observation.reference_range,
-                    "status": "pending_review",
-                    "provenance": observation.provenance,
-                },
-            }
+            envelope = self.build_pending_observation_envelope(observation)
             responses.append(await self._post_with_retry(envelope))
         return responses
 

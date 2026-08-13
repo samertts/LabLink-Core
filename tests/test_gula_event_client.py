@@ -40,3 +40,28 @@ async def test_pending_observation_is_published_as_safe_envelope(monkeypatch):
     assert envelope["idempotency_key"] == "stable-observation-key"
     assert envelope["payload"]["status"] == "pending_review"
     assert envelope["entity_id"] == "sample-1"
+
+
+def test_pending_observation_envelope_is_stable_for_replay():
+    client = GulaClient("https://gula.example", "lab-1")
+    observation = PendingDeviceObservation(
+        observation_id="obs-2",
+        sample_id="sample-2",
+        patient_id="patient-2",
+        device_id="device-2",
+        test_code="CRP",
+        value=12.0,
+        unit="mg/L",
+        reference_range="0-5",
+        observed_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+        status="pending_review",
+        provenance="vendor:device:digest",
+        idempotency_key="replay-key",
+    )
+
+    first = client.build_pending_observation_envelope(observation)
+    second = client.build_pending_observation_envelope(observation)
+
+    assert first == second
+    assert first["correlation_id"] == first["event_id"]
+    assert first["payload"]["status"] == "pending_review"
