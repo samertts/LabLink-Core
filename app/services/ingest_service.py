@@ -36,12 +36,14 @@ class IngestService:
         sync_engine: SyncEngine,
         event_bus: EventBus | None = None,
         metrics: MetricsCollector | None = None,
+        gula_client=None,
     ) -> None:
         self._pipeline = pipeline
         self._repository = repository
         self._sync_engine = sync_engine
         self._event_bus = event_bus
         self._metrics = metrics
+        self._gula_client = gula_client
 
     async def ingest(
         self,
@@ -102,6 +104,12 @@ class IngestService:
             )
             for result in results
         ]
+
+        if self._gula_client and observations:
+            try:
+                await self._gula_client.send_pending_observations(observations)
+            except Exception:
+                logger.exception("Failed to publish pending observations to GULA")
 
         if self._event_bus and results:
             self._event_bus.publish(

@@ -1,22 +1,34 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
-from typing import Any
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Iterable
 
 import httpx
 
+from app.contracts.device_observation import PendingDeviceObservation
 from app.pipeline.normalizer import NormalizedResult
 
 logger = logging.getLogger("lablink.gula")
 
 
 class GulaClient:
-    def __init__(self, base_url: str, lab_id: str, timeout: float = 5.0, max_retries: int = 3) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        lab_id: str,
+        timeout: float = 5.0,
+        max_retries: int = 3,
+        access_token: str | None = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.lab_id = lab_id
         self.timeout = timeout
         self.max_retries = max_retries
+        self.access_token = access_token
         self._client: httpx.AsyncClient | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
@@ -26,6 +38,62 @@ class GulaClient:
                 limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
             )
         return self._client
+
+    def _headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self.access_token}"} if self.access_token else {}
+
+    async def _post_with_retry(self, envelope: dict[str, Any]) -> dict[str, Any]:
+        last_error: Exception | None = None
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                client = await self._get_client()
+                response = await client.post(
+                    f"{self.base_url}/integrations/events",
+                    json=envelope,
+                    headers=self._headers(),
+                )
+                response.raise_for_status()
+                return response.json()
+            except Exception as exc:
+                last_error = exc
+                if attempt < self.max_retries:
+                    await asyncio.sleep(2 ** (attempt - 1))
+        logger.error("GULA event delivery failed after %d attempts", self.max_retries)
+        return {"status": "failed", "error": str(last_error) if last_error else "unknown_error"}
+
+    async def send_pending_observations(
+        self, observations: Iterable[PendingDeviceObservation]
+    ) -> list[dict[str, Any]]:
+        """Publish observations as pending events; never marks them approved."""
+        responses: list[dict[str, Any]] = []
+        for observation in observations:
+            event_id = "evt-" + hashlib.sha256(observation.idempotency_key.encode()).hexdigest()[:32]
+            envelope = {
+                "event_id": event_id,
+                "event_type": "device.observation.pending",
+                "schema_version": 1,
+                "source_service": "lablink-core",
+                "tenant_id": self.lab_id,
+                "occurred_at": observation.observed_at.astimezone(timezone.utc).isoformat(),
+                "actor_id": observation.device_id,
+                "entity_id": observation.sample_id,
+                "correlation_id": str(uuid.uuid4()),
+                "idempotency_key": observation.idempotency_key,
+                "payload": {
+                    "sample_id": observation.sample_id,
+                    "observation_id": observation.observation_id,
+                    "patient_id": observation.patient_id,
+                    "device_id": observation.device_id,
+                    "test_code": observation.test_code,
+                    "value": observation.value,
+                    "unit": observation.unit,
+                    "reference_range": observation.reference_range,
+                    "status": "pending_review",
+                    "provenance": observation.provenance,
+                },
+            }
+            responses.append(await self._post_with_retry(envelope))
+        return responses
 
     async def send_results(self, results: list[NormalizedResult]) -> dict[str, Any]:
         payload = {
